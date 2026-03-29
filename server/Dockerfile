@@ -2,9 +2,12 @@ FROM gradle:8.10.2-jdk17 AS builder
 
 WORKDIR /app
 
-COPY build.gradle settings.gradle gradlew gradlew.bat ./
-COPY gradle ./gradle
-COPY src ./src
+COPY server/build.gradle ./build.gradle
+COPY server/settings.gradle ./settings.gradle
+COPY server/gradlew ./gradlew
+COPY server/gradlew.bat ./gradlew.bat
+COPY server/gradle ./gradle
+COPY server/src ./src
 
 RUN chmod +x ./gradlew && ./gradlew bootJar --no-daemon
 
