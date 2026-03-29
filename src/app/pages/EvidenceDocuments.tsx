@@ -218,13 +218,13 @@ export function EvidenceDocuments() {
   };
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 p-4 md:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">증빙 문서</h1>
           <p className="mt-1 text-sm text-gray-600">문서 초안 생성, 템플릿 관리, Word 다운로드를 처리합니다.</p>
         </div>
-        <Button className="gap-2" onClick={() => void handleCreateDocument()}>
+        <Button className="w-full gap-2 sm:w-auto" onClick={() => void handleCreateDocument()}>
           <FilePlus2 className="h-4 w-4" />
           문서 생성
         </Button>

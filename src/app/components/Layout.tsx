@@ -1,14 +1,16 @@
+import { useState } from "react";
 import { Outlet, Link, useLocation } from "react-router";
 import {
-  LayoutDashboard,
-  FolderKanban,
-  FileSpreadsheet,
-  Receipt,
-  FileText,
-  CheckCircle,
-  FileBarChart,
   Bell,
+  CheckCircle,
   ChevronDown,
+  FileBarChart,
+  FileSpreadsheet,
+  FileText,
+  FolderKanban,
+  LayoutDashboard,
+  Menu,
+  Receipt,
   User,
 } from "lucide-react";
 import { Badge } from "./ui/badge";
@@ -20,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Button } from "./ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "./ui/sheet";
 import { useProjectContext } from "../context/ProjectContext";
 
 const navigation = [
@@ -32,8 +35,42 @@ const navigation = [
   { name: "정산 보고서", href: "/final-settlement", icon: FileBarChart },
 ];
 
+function NavigationLinks({
+  pathname,
+  onNavigate,
+}: {
+  pathname: string;
+  onNavigate?: () => void;
+}) {
+  return (
+    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+      {navigation.map((item) => {
+        const isActive =
+          pathname === item.href ||
+          (item.href !== "/" && pathname.startsWith(item.href));
+        const Icon = item.icon;
+
+        return (
+          <Link
+            key={item.name}
+            to={item.href}
+            onClick={onNavigate}
+            className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              isActive ? "bg-blue-50 text-blue-700" : "text-gray-700 hover:bg-gray-100"
+            }`}
+          >
+            <Icon className="h-5 w-5" />
+            <span>{item.name}</span>
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function Layout() {
   const location = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const {
     projects,
     selectedProject,
@@ -55,111 +92,97 @@ export function Layout() {
   } as const;
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      {/* Left Sidebar */}
-      <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
-        {/* Logo */}
-        <div className="h-16 flex items-center px-6 border-b border-gray-200">
-          <h1 className="font-semibold text-lg text-gray-900">
-            Unnies Accounting Agent
-          </h1>
+    <div className="flex min-h-svh bg-gray-50">
+      <aside className="hidden w-64 flex-col border-r border-gray-200 bg-white md:flex">
+        <div className="flex h-16 items-center border-b border-gray-200 px-6">
+          <h1 className="text-lg font-semibold text-gray-900">Unnies Accounting Agent</h1>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {navigation.map((item) => {
-            const isActive =
-              location.pathname === item.href ||
-              (item.href !== "/" && location.pathname.startsWith(item.href));
-            const Icon = item.icon;
+        <NavigationLinks pathname={location.pathname} />
 
-            return (
-              <Link
-                key={item.name}
-                to={item.href}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-gray-700 hover:bg-gray-100"
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-                <span>{item.name}</span>
-              </Link>
-            );
-          })}
-        </nav>
-
-        {/* Sidebar Footer */}
-        <div className="p-4 border-t border-gray-200">
-          <div className="text-xs text-gray-500">
-            © 2026 Unnies Accounting
-          </div>
+        <div className="border-t border-gray-200 p-4 text-xs text-gray-500">
+          2026 Unnies Accounting
         </div>
       </aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Header */}
-        <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
-          {/* Left: Project Selector */}
-          <div className="flex items-center gap-4">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-md bg-white hover:bg-gray-50 transition-colors">
-                  <span className="font-medium">
-                    {loading ? "프로젝트 불러오는 중..." : selectedProject?.name ?? "프로젝트 없음"}
-                  </span>
-                  <ChevronDown className="w-4 h-4" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-64">
-                {projects.map((project) => (
-                  <DropdownMenuItem
-                    key={project.id}
-                    onClick={() => setSelectedProjectId(project.id)}
-                    className={
-                      project.id === selectedProjectId ? "bg-blue-50 text-blue-700" : ""
-                    }
-                  >
-                    {project.name}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="flex min-h-16 flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3 md:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="md:hidden">
+              <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="outline" size="icon">
+                    <Menu className="h-5 w-5" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" className="p-0">
+                  <SheetHeader className="border-b border-gray-200 px-6 py-4 text-left">
+                    <SheetTitle>Unnies Accounting Agent</SheetTitle>
+                  </SheetHeader>
+                  <div className="flex h-full flex-col">
+                    <NavigationLinks
+                      pathname={location.pathname}
+                      onNavigate={() => setMobileNavOpen(false)}
+                    />
+                  </div>
+                </SheetContent>
+              </Sheet>
+            </div>
+
+            <div className="min-w-0">
+              <div className="text-xs font-medium uppercase tracking-[0.16em] text-gray-400 md:hidden">
+                Admin SaaS
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex max-w-[min(72vw,20rem)] items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-left hover:bg-gray-50">
+                    <span className="truncate font-medium">
+                      {loading ? "프로젝트 불러오는 중..." : selectedProject?.name ?? "프로젝트 없음"}
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-64">
+                  {projects.map((project) => (
+                    <DropdownMenuItem
+                      key={project.id}
+                      onClick={() => setSelectedProjectId(project.id)}
+                      className={project.id === selectedProjectId ? "bg-blue-50 text-blue-700" : ""}
+                    >
+                      {project.name}
+                    </DropdownMenuItem>
+                  ))}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link to="/projects">모든 프로젝트 보기</Link>
                   </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem>
-                  <Link to="/projects">모든 프로젝트 보기</Link>
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
 
             {selectedProject && (
-              <Badge
-                variant="outline"
-                className={statusClassName[selectedProject.status]}
-              >
+              <Badge variant="outline" className={`hidden sm:inline-flex ${statusClassName[selectedProject.status]}`}>
                 {statusLabel[selectedProject.status]}
               </Badge>
             )}
           </div>
 
-          {/* Right: Actions & User Menu */}
-          <div className="flex items-center gap-4">
-            {/* Quick Actions */}
-            <Button variant="outline" size="sm">
-              + 지출 등록
-            </Button>
+          <div className="flex w-full items-center justify-end gap-2 sm:w-auto sm:gap-3">
+            <Link to="/expense-records" className="hidden sm:block">
+              <Button variant="outline" size="sm">
+                + 지출 등록
+              </Button>
+            </Link>
 
-            {/* Notifications */}
             <Button variant="ghost" size="icon" className="relative">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+              <Bell className="h-5 w-5" />
+              <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500" />
             </Button>
 
-            {/* User Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon">
-                  <User className="w-5 h-5" />
+                  <User className="h-5 w-5" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -172,8 +195,7 @@ export function Layout() {
           </div>
         </header>
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>
       </div>

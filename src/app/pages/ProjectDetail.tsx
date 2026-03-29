@@ -356,8 +356,8 @@ export function ProjectDetail() {
   };
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 p-4 md:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <Link to="/projects">
             <Button variant="ghost" size="icon">
@@ -369,7 +369,7 @@ export function ProjectDetail() {
             <p className="mt-1 text-sm text-gray-600">기본 정보, 증빙문서 템플릿, 예산 규칙을 관리합니다.</p>
           </div>
         </div>
-        <Button className="gap-2" onClick={() => void handleSaveProject()}>
+        <Button className="w-full gap-2 sm:w-auto" onClick={() => void handleSaveProject()}>
           <Save className="h-4 w-4" />
           기본 정보 저장
         </Button>

@@ -57,14 +57,14 @@ export function Projects() {
   };
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 p-4 md:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">프로젝트</h1>
           <p className="mt-1 text-sm text-gray-600">회계 프로젝트 및 예산 현황을 관리합니다.</p>
         </div>
         <Link to="/projects/new">
-          <Button className="gap-2">
+          <Button className="w-full gap-2 sm:w-auto">
             <Plus className="h-4 w-4" />
             프로젝트 생성
           </Button>
@@ -73,7 +73,7 @@ export function Projects() {
 
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
               <Input
@@ -83,7 +83,7 @@ export function Projects() {
                 onChange={(event) => setSearch(event.target.value)}
               />
             </div>
-            <Button variant="outline" className="gap-2">
+            <Button variant="outline" className="gap-2 sm:w-auto">
               <Filter className="h-4 w-4" />
               필터
             </Button>
@@ -92,7 +92,7 @@ export function Projects() {
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle>전체 프로젝트 ({filteredProjects.length})</CardTitle>
           <AlertDialog>
             <AlertDialogTrigger asChild>

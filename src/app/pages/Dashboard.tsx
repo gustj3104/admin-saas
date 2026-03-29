@@ -154,7 +154,7 @@ export function Dashboard() {
   const totalUsed = budgetByCategory.reduce((sum, item) => sum + item.used, 0);
 
   return (
-    <div className="p-6 space-y-6 bg-gray-50">
+    <div className="space-y-6 bg-gray-50 p-4 md:p-6">
       {/* Page Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-gray-900">대시보드</h1>
@@ -209,7 +209,7 @@ export function Dashboard() {
               <div key={item.category} className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-gray-900 min-w-[160px]">
+                    <span className="min-w-0 text-sm font-medium text-gray-900 sm:min-w-[160px]">
                       {item.category}
                     </span>
                     <Badge
@@ -225,7 +225,7 @@ export function Dashboard() {
                       {item.rate}%
                     </Badge>
                   </div>
-                  <div className="flex items-center gap-6 text-sm">
+                  <div className="hidden items-center gap-6 text-sm sm:flex">
                     <span className="text-gray-600">
                       ₩{item.used.toLocaleString()} / ₩{item.allocated.toLocaleString()}
                     </span>
@@ -262,9 +262,9 @@ export function Dashboard() {
 
           {/* Total Summary */}
           <div className="pt-4 border-t-2 border-gray-300">
-            <div className="flex items-center justify-between mb-2">
+            <div className="mb-2 flex items-center justify-between gap-3">
               <span className="text-sm font-bold text-gray-900">합계</span>
-              <div className="flex items-center gap-6 text-sm font-bold">
+              <div className="hidden items-center gap-6 text-sm font-bold sm:flex">
                 <span className="text-gray-900">
                   ₩{totalUsed.toLocaleString()} / ₩{totalAllocated.toLocaleString()}
                 </span>

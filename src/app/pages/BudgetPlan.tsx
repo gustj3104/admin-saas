@@ -67,13 +67,13 @@ export function BudgetPlan() {
   };
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 p-4 md:p-6">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">예산 계획</h1>
           <p className="mt-1 text-sm text-gray-600">예산 배분 검토 및 조정을 진행합니다.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
           <Button variant="outline" className="gap-2">
             <Download className="h-4 w-4" />
             Word 내보내기
