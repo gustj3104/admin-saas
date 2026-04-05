@@ -7,5 +7,6 @@ import java.util.List;
 
 public interface ValidationResultRepository extends JpaRepository<ValidationResultEntity, Long> {
     List<ValidationResultEntity> findByProjectIdOrderByResultDateDescIdAsc(Long projectId);
+    List<ValidationResultEntity> findByProjectId(Long projectId);
     void deleteByProjectId(Long projectId);
 }

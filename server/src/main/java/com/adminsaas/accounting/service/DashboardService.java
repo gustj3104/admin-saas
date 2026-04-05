@@ -31,7 +31,7 @@ public class DashboardService {
     public DashboardOverview getOverview(Long projectId) {
         ProjectEntity project = projectService.findById(projectId);
         List<BudgetRuleEntity> budgetRules = budgetRuleService.findByProjectId(projectId);
-        List<ExpenseEntity> expenses = expenseService.findByProjectId(projectId);
+        List<ExpenseEntity> expenses = expenseService.findProcessedByProjectId(projectId);
         List<ValidationResultEntity> validations = validationService.findByProjectId(projectId);
 
         BigDecimal used = expenses.stream().map(ExpenseEntity::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);

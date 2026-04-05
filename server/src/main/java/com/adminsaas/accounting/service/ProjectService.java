@@ -48,7 +48,7 @@ public class ProjectService {
 
     public ProjectEntity findById(Long id) {
         return projectRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Project not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "프로젝트를 찾을 수 없습니다."));
     }
 
     public ProjectEntity save(ProjectEntity project) {

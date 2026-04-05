@@ -25,14 +25,34 @@ import { Button } from "./ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "./ui/sheet";
 import { useProjectContext } from "../context/ProjectContext";
 
-const navigation = [
-  { name: "대시보드", href: "/", icon: LayoutDashboard },
-  { name: "프로젝트", href: "/projects", icon: FolderKanban },
-  { name: "예산 계획", href: "/budget-plan", icon: FileSpreadsheet },
-  { name: "지출 기록", href: "/expense-records", icon: Receipt },
-  { name: "증빙 문서", href: "/evidence-documents", icon: FileText },
-  { name: "검증", href: "/validation", icon: CheckCircle },
-  { name: "정산 보고서", href: "/final-settlement", icon: FileBarChart },
+type NavigationItem = {
+  name: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+};
+
+type NavigationGroup = {
+  label: string;
+  items: NavigationItem[];
+};
+
+const navigationGroups: NavigationGroup[] = [
+  {
+    label: "프로젝트",
+    items: [
+      { name: "대시보드", href: "/", icon: LayoutDashboard },
+      { name: "프로젝트 관리", href: "/projects", icon: FolderKanban },
+      { name: "검증", href: "/validation", icon: CheckCircle },
+    ],
+  },
+  {
+    label: "지출",
+    items: [
+      { name: "지출 기록", href: "/expense-records", icon: Receipt },
+      { name: "증빙 문서", href: "/evidence-documents", icon: FileText },
+      { name: "정산 보고서", href: "/final-settlement", icon: FileBarChart },
+    ],
+  },
 ];
 
 function NavigationLinks({
@@ -43,27 +63,36 @@ function NavigationLinks({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-      {navigation.map((item) => {
-        const isActive =
-          pathname === item.href ||
-          (item.href !== "/" && pathname.startsWith(item.href));
-        const Icon = item.icon;
+    <nav className="flex flex-1 flex-col overflow-y-auto px-3 py-4">
+      {navigationGroups.map((group) => (
+        <div key={group.label} className="mb-5">
+          <div className="px-3 pb-2 text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+            {group.label}
+          </div>
+          <div className="flex flex-col gap-1">
+            {group.items.map((item) => {
+              const isActive =
+                pathname === item.href ||
+                (item.href !== "/" && pathname.startsWith(item.href));
+              const Icon = item.icon;
 
-        return (
-          <Link
-            key={item.name}
-            to={item.href}
-            onClick={onNavigate}
-            className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              isActive ? "bg-blue-50 text-blue-700" : "text-gray-700 hover:bg-gray-100"
-            }`}
-          >
-            <Icon className="h-5 w-5" />
-            <span>{item.name}</span>
-          </Link>
-        );
-      })}
+              return (
+                <Link
+                  key={item.name}
+                  to={item.href}
+                  onClick={onNavigate}
+                  className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                    isActive ? "bg-blue-50 text-blue-700" : "text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  <Icon className="h-5 w-5" />
+                  <span>{item.name}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </nav>
   );
 }
@@ -80,7 +109,7 @@ export function Layout() {
   } = useProjectContext();
 
   const statusLabel = {
-    ACTIVE: "진행중",
+    ACTIVE: "진행 중",
     COMPLETED: "완료",
     DRAFT: "초안",
   } as const;

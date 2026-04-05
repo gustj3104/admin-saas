@@ -1,8 +1,21 @@
 package com.adminsaas.accounting.web;
 
 import com.adminsaas.accounting.service.FileStorageService;
+import com.adminsaas.accounting.service.ProjectTemplateLoader;
 import com.adminsaas.accounting.service.ReceiptOcrService;
 import com.adminsaas.accounting.service.TemplateFieldService;
+import com.adminsaas.accounting.template.domain.DocumentTemplate;
+import com.adminsaas.accounting.template.domain.InspectionReportExportMode;
+import com.adminsaas.accounting.template.domain.InspectionReportItemRow;
+import com.adminsaas.accounting.template.domain.InspectionReportReceiptEntry;
+import com.adminsaas.accounting.template.domain.NormalizedLabel;
+import com.adminsaas.accounting.template.domain.NormalizedTable;
+import com.adminsaas.accounting.template.domain.TemplateCandidateRecommendation;
+import com.adminsaas.accounting.template.domain.TemplateExtractionSummary;
+import com.adminsaas.accounting.template.domain.TemplateMappingSchema;
+import com.adminsaas.accounting.template.service.InspectionReportGenerationService;
+import com.adminsaas.accounting.template.service.InspectionReportWordExportService;
+import com.adminsaas.accounting.template.service.TemplateService;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpHeaders;
@@ -28,13 +41,25 @@ public class FileUploadController {
     private final FileStorageService fileStorageService;
     private final ReceiptOcrService receiptOcrService;
     private final TemplateFieldService templateFieldService;
+    private final ProjectTemplateLoader projectTemplateLoader;
+    private final TemplateService templateService;
+    private final InspectionReportGenerationService inspectionReportGenerationService;
+    private final InspectionReportWordExportService inspectionReportWordExportService;
 
     public FileUploadController(FileStorageService fileStorageService,
                                 ReceiptOcrService receiptOcrService,
-                                TemplateFieldService templateFieldService) {
+                                TemplateFieldService templateFieldService,
+                                ProjectTemplateLoader projectTemplateLoader,
+                                TemplateService templateService,
+                                InspectionReportGenerationService inspectionReportGenerationService,
+                                InspectionReportWordExportService inspectionReportWordExportService) {
         this.fileStorageService = fileStorageService;
         this.receiptOcrService = receiptOcrService;
         this.templateFieldService = templateFieldService;
+        this.projectTemplateLoader = projectTemplateLoader;
+        this.templateService = templateService;
+        this.inspectionReportGenerationService = inspectionReportGenerationService;
+        this.inspectionReportWordExportService = inspectionReportWordExportService;
     }
 
     @PostMapping(path = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -78,6 +103,61 @@ public class FileUploadController {
         );
     }
 
+    @GetMapping("/template-extract")
+    public ProjectTemplateExtractResponse extractTemplate(@PathVariable Long projectId,
+                                                          @RequestParam String path) throws IOException {
+        DocumentTemplate template = projectTemplateLoader.load(projectId, path);
+        TemplateCandidateRecommendation recommendation = templateService.recommend(template);
+        return new ProjectTemplateExtractResponse(
+                recommendation.schema(),
+                recommendation.detectedLabels(),
+                recommendation.detectedTables(),
+                recommendation.summary()
+        );
+    }
+
+    @PostMapping("/inspection-report/generate")
+    public InspectionReportGenerateResponse generateInspectionReport(@PathVariable Long projectId,
+                                                                    @RequestParam String path,
+                                                                    @org.springframework.web.bind.annotation.RequestBody InspectionReportGenerateRequest request) throws IOException {
+        DocumentTemplate template = projectTemplateLoader.load(projectId, path);
+        var job = inspectionReportGenerationService.generate(
+                template,
+                request.mode(),
+                request.entries() == null ? List.of() : request.entries().stream().map(ReceiptEntryRequest::toDomain).toList()
+        );
+        return new InspectionReportGenerateResponse(
+                job.mode(),
+                job.documents().size(),
+                job.documents().stream()
+                        .map(document -> new GeneratedDocumentResponse(
+                                document.groupKey(),
+                                document.title(),
+                                document.receiptBlocks().size()
+                        ))
+                        .toList()
+        );
+    }
+
+    @PostMapping(path = "/inspection-report/export-word")
+    public ResponseEntity<ByteArrayResource> exportInspectionReportWord(@PathVariable Long projectId,
+                                                                       @RequestParam String path,
+                                                                       @org.springframework.web.bind.annotation.RequestBody InspectionReportGenerateRequest request) throws IOException {
+        DocumentTemplate template = projectTemplateLoader.load(projectId, path);
+        InspectionReportWordExportService.ExportedInspectionReport exported = inspectionReportWordExportService.export(
+                projectId,
+                path,
+                template,
+                request.mode(),
+                request.entries() == null ? List.of() : request.entries().stream().map(ReceiptEntryRequest::toDomain).toList()
+        );
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + exported.filename() + "\"")
+                .contentType(MediaType.parseMediaType(exported.contentType()))
+                .body(new ByteArrayResource(exported.content()));
+    }
+
     @GetMapping("/download")
     public ResponseEntity<ByteArrayResource> downloadFile(@PathVariable Long projectId,
                                                           @RequestParam String path) throws IOException {
@@ -116,7 +196,17 @@ public class FileUploadController {
                         result.fields().amount(),
                         result.fields().paymentMethod(),
                         result.fields().category(),
-                        result.fields().subcategory()
+                        result.fields().subcategory(),
+                        result.fields().lineItems().stream()
+                                .map(lineItem -> new ReceiptOcrLineItemResponse(
+                                        lineItem.itemName(),
+                                        lineItem.spec(),
+                                        lineItem.quantity(),
+                                        lineItem.unit(),
+                                        lineItem.unitPrice(),
+                                        lineItem.amount()
+                                ))
+                                .toList()
                 ),
                 result.warnings()
         );
@@ -163,7 +253,18 @@ public class FileUploadController {
             java.math.BigDecimal amount,
             String paymentMethod,
             String category,
-            String subcategory
+            String subcategory,
+            java.util.List<ReceiptOcrLineItemResponse> lineItems
+    ) {
+    }
+
+    public record ReceiptOcrLineItemResponse(
+            String itemName,
+            String spec,
+            java.math.BigDecimal quantity,
+            String unit,
+            java.math.BigDecimal unitPrice,
+            java.math.BigDecimal amount
     ) {
     }
 
@@ -173,6 +274,73 @@ public class FileUploadController {
             boolean supported,
             List<String> placeholders,
             List<String> warnings
+    ) {
+    }
+
+    public record ProjectTemplateExtractResponse(
+            TemplateMappingSchema schema,
+            List<NormalizedLabel> detectedLabels,
+            List<NormalizedTable> detectedTables,
+            TemplateExtractionSummary summary
+    ) {
+    }
+
+    public record InspectionReportGenerateRequest(
+            InspectionReportExportMode mode,
+            List<ReceiptEntryRequest> entries
+    ) {
+    }
+
+    public record ReceiptEntryRequest(
+            String receiptId,
+            String title,
+            String paymentDate,
+            String vendor,
+            String inspector,
+            String contractAmount,
+            String receiptImagePath,
+            Integer receiptOrder,
+            List<ItemRowRequest> itemRows
+    ) {
+        private InspectionReportReceiptEntry toDomain() {
+            return new InspectionReportReceiptEntry(
+                    receiptId,
+                    title,
+                    paymentDate,
+                    vendor,
+                    inspector,
+                    contractAmount,
+                    receiptImagePath,
+                    receiptOrder == null ? 0 : receiptOrder,
+                    itemRows == null ? List.of() : itemRows.stream().map(ItemRowRequest::toDomain).toList()
+            );
+        }
+    }
+
+    public record ItemRowRequest(
+            String itemName,
+            String spec,
+            String quantity,
+            String unit,
+            String unitPrice,
+            String amount
+    ) {
+        private InspectionReportItemRow toDomain() {
+            return new InspectionReportItemRow(itemName, spec, quantity, unit, unitPrice, amount);
+        }
+    }
+
+    public record InspectionReportGenerateResponse(
+            InspectionReportExportMode mode,
+            int documentCount,
+            List<GeneratedDocumentResponse> documents
+    ) {
+    }
+
+    public record GeneratedDocumentResponse(
+            String groupKey,
+            String title,
+            int blockCount
     ) {
     }
 }

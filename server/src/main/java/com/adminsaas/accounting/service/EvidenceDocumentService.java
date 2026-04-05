@@ -23,7 +23,7 @@ public class EvidenceDocumentService {
 
     public EvidenceDocumentEntity findById(Long id) {
         return evidenceDocumentRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Evidence document not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "증빙 문서를 찾을 수 없습니다."));
     }
 
     public EvidenceDocumentEntity save(EvidenceDocumentEntity document) {

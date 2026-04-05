@@ -55,7 +55,7 @@ public class NativeHwpExportService {
             runConverter(workDir, docxFile, hmlFile, outputFile);
 
             if (!Files.exists(outputFile) || Files.size(outputFile) == 0) {
-                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "HWP converter finished without producing an output file.");
+                throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "HWP 변환은 완료됐지만 출력 파일이 생성되지 않았습니다.");
             }
 
             return Files.readAllBytes(outputFile);
@@ -71,7 +71,7 @@ public class NativeHwpExportService {
         if (converterCommand.isBlank()) {
             throw new ResponseStatusException(
                     HttpStatus.SERVICE_UNAVAILABLE,
-                    "Native HWP conversion is not configured. Set HWP_CONVERTER_COMMAND first."
+                    "네이티브 HWP 변환이 설정되지 않았습니다. 먼저 HWP_CONVERTER_COMMAND를 설정해 주세요."
             );
         }
     }
@@ -95,18 +95,18 @@ public class NativeHwpExportService {
 
             if (!finished) {
                 process.destroyForcibly();
-                throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "HWP conversion timed out.");
+                throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "HWP 변환 시간이 초과되었습니다.");
             }
 
             if (process.exitValue() != 0) {
                 String message = output == null || output.trim().isBlank()
-                        ? "HWP conversion failed."
-                        : "HWP conversion failed: " + output.trim();
+                        ? "HWP 변환에 실패했습니다."
+                        : "HWP 변환에 실패했습니다: " + output.trim();
                 throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, message);
             }
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "HWP conversion was interrupted.");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "HWP 변환이 중단되었습니다.");
         }
     }
 

@@ -57,6 +57,11 @@ public class ExpenseController {
         return ExpenseResponse.from(expenseService.update(id, expense));
     }
 
+    @PostMapping("/{id}/status")
+    public ExpenseResponse updateExpenseStatus(@PathVariable Long id, @Valid @RequestBody UpdateExpenseStatusRequest request) {
+        return ExpenseResponse.from(expenseService.updateStatus(id, request.status()));
+    }
+
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteExpense(@PathVariable Long id) {
@@ -92,6 +97,10 @@ public class ExpenseController {
             @NotNull BigDecimal amount,
             @NotBlank String paymentMethod,
             String notes,
+            @NotNull ExpenseStatus status
+    ) {}
+
+    public record UpdateExpenseStatusRequest(
             @NotNull ExpenseStatus status
     ) {}
 

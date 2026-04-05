@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/documents")
@@ -95,9 +96,16 @@ public class EvidenceDocumentController {
                 .body(document);
     }
 
+    @PostMapping(path = "/preview/word")
+    public PreviewResponse previewWord(@Valid @RequestBody EvidenceExportRequest request) throws IOException {
+        WordExportService.EvidencePreviewResult preview = wordExportService.createEvidencePreview(toWordPayload(request));
+        return new PreviewResponse(preview.paragraphs(), preview.tables());
+    }
+
     private WordExportService.EvidenceExportPayload toWordPayload(EvidenceExportRequest request) {
         return new WordExportService.EvidenceExportPayload(
                 request.projectId(),
+                request.templateCategory(),
                 request.projectName(),
                 request.paymentDate(),
                 request.vendor(),
@@ -106,7 +114,18 @@ public class EvidenceDocumentController {
                 request.subcategory(),
                 request.paymentMethod(),
                 request.amount(),
-                request.notes()
+                request.notes(),
+                request.fieldValues(),
+                request.lineItems() == null ? List.of() : request.lineItems().stream()
+                        .map(item -> new WordExportService.EvidenceLineItem(
+                                item.itemName(),
+                                item.spec(),
+                                item.quantity(),
+                                item.unit(),
+                                item.unitPrice(),
+                                item.amount()
+                        ))
+                        .toList()
         );
     }
 
@@ -120,7 +139,8 @@ public class EvidenceDocumentController {
                 request.subcategory(),
                 request.paymentMethod(),
                 request.amount(),
-                request.notes()
+                request.notes(),
+                request.fieldValues()
         );
     }
 
@@ -148,6 +168,7 @@ public class EvidenceDocumentController {
 
     public record EvidenceExportRequest(
             Long projectId,
+            String templateCategory,
             String projectName,
             String paymentDate,
             String vendor,
@@ -156,7 +177,19 @@ public class EvidenceDocumentController {
             String subcategory,
             String paymentMethod,
             String amount,
-            String notes
+            String notes,
+            Map<String, String> fieldValues,
+            List<EvidenceLineItemRequest> lineItems
+    ) {
+    }
+
+    public record EvidenceLineItemRequest(
+            String itemName,
+            String spec,
+            String quantity,
+            String unit,
+            String unitPrice,
+            String amount
     ) {
     }
 
@@ -168,6 +201,12 @@ public class EvidenceDocumentController {
             BigDecimal amount,
             LocalDate createdDate,
             DocumentStatus status
+    ) {
+    }
+
+    public record PreviewResponse(
+            List<String> paragraphs,
+            List<List<List<String>>> tables
     ) {
     }
 }

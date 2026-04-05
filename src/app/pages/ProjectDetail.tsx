@@ -1,5 +1,5 @@
-import type { ChangeEvent } from "react";
-import { useEffect, useState } from "react";
+﻿import type { ChangeEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import { AlertCircle, ArrowLeft, CheckCircle, Eye, Plus, Save, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +27,7 @@ type BudgetSubcategory = {
   id: number;
   name: string;
   percentageLimit: number;
+  allocatedAmount: number;
   ruleDescription: string;
   status: BudgetItemStatus;
 };
@@ -39,10 +40,10 @@ type BudgetCategoryRule = {
 };
 
 const PLACEHOLDER_DESCRIPTIONS: Record<string, string> = {
-  date: "지출 또는 증빙 작성일",
-  vendor: "거래처 또는 공급사명",
-  amount: "총 지출 금액",
-  itemName: "품목 또는 지출 항목명",
+  date: "결제 또는 작성일",
+  vendor: "납품처",
+  amount: "금액",
+  itemName: "검수 물품명",
   category: "예산 카테고리",
   subcategory: "예산 세부 항목",
   paymentMethod: "결제 수단",
@@ -51,9 +52,11 @@ const PLACEHOLDER_DESCRIPTIONS: Record<string, string> = {
 };
 
 const DEFAULT_TEMPLATE_FIELDS: TemplateField[] = [
-  { id: "date", placeholder: "{{ date }}", description: PLACEHOLDER_DESCRIPTIONS.date, mapped: false },
-  { id: "vendor", placeholder: "{{ vendor }}", description: PLACEHOLDER_DESCRIPTIONS.vendor, mapped: false },
-  { id: "amount", placeholder: "{{ amount }}", description: PLACEHOLDER_DESCRIPTIONS.amount, mapped: false },
+  { id: "title", placeholder: "{{ title }}", description: "검수 건명", mapped: false },
+  { id: "date", placeholder: "{{ date }}", description: "결제 또는 작성일", mapped: false },
+  { id: "vendor", placeholder: "{{ vendor }}", description: "납품처", mapped: false },
+  { id: "inspector", placeholder: "{{ inspector }}", description: "검수자", mapped: false },
+  { id: "contractAmount", placeholder: "{{ contractAmount }}", description: "계약금액", mapped: false },
 ];
 
 function toTemplateFields(analysis: TemplateFieldAnalysis | null): TemplateField[] {
@@ -89,6 +92,7 @@ function groupBudgetRules(rules: BudgetRule[]): BudgetCategoryRule[] {
         id: rule.id,
         name: rule.subcategory,
         percentageLimit: rule.percentage,
+        allocatedAmount: rule.allocated,
         ruleDescription: rule.ruleDescription,
         status: rule.status,
       });
@@ -107,6 +111,7 @@ function groupBudgetRules(rules: BudgetRule[]): BudgetCategoryRule[] {
           id: rule.id,
           name: rule.subcategory,
           percentageLimit: rule.percentage,
+          allocatedAmount: rule.allocated,
           ruleDescription: rule.ruleDescription,
           status: rule.status,
         },
@@ -123,12 +128,23 @@ function buildBudgetPayload(groups: BudgetCategoryRule[], totalBudget: number) {
       category: group.category,
       subcategory: subcategory.name,
       ruleDescription:
-        subcategory.ruleDescription || `${group.category} > ${subcategory.name} 한도 ${subcategory.percentageLimit}%`,
-      allocated: Math.round((totalBudget * subcategory.percentageLimit) / 100),
+        subcategory.ruleDescription || `${group.category} > ${subcategory.name} ??뺣즲 ${subcategory.percentageLimit}%`,
+      allocated: subcategory.allocatedAmount,
       percentage: subcategory.percentageLimit,
       status: subcategory.status ?? "VALID",
     }));
   });
+}
+
+function calculateAllocatedAmount(totalBudget: number, percentageLimit: number) {
+  return Math.round((totalBudget * percentageLimit) / 100);
+}
+
+function calculatePercentage(totalBudget: number, allocatedAmount: number) {
+  if (totalBudget <= 0) {
+    return 0;
+  }
+  return Number(((allocatedAmount / totalBudget) * 100).toFixed(2));
 }
 
 function createEmptyCategoryRule(id: number): BudgetCategoryRule {
@@ -141,6 +157,7 @@ function createEmptyCategoryRule(id: number): BudgetCategoryRule {
         id: id - 1,
         name: "",
         percentageLimit: 0,
+        allocatedAmount: 0,
         ruleDescription: "",
         status: "WARNING",
       },
@@ -159,6 +176,9 @@ export function ProjectDetail() {
   const [templateFields, setTemplateFields] = useState<TemplateField[]>(DEFAULT_TEMPLATE_FIELDS);
   const [templateAnalysis, setTemplateAnalysis] = useState<TemplateFieldAnalysis | null>(null);
   const [analyzingTemplate, setAnalyzingTemplate] = useState(false);
+  const [uploadingTemplate, setUploadingTemplate] = useState(false);
+  const [templateUploadError, setTemplateUploadError] = useState<string | null>(null);
+  const templateUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [projectForm, setProjectForm] = useState({
     name: "",
     description: "",
@@ -170,6 +190,7 @@ export function ProjectDetail() {
   });
 
   const uploadedTemplate = templateFiles[0] ?? null;
+  const totalBudgetAmount = Number(projectForm.totalBudget || 0);
 
   const refreshTemplateFiles = async () => {
     if (!projectId) return;
@@ -219,7 +240,7 @@ export function ProjectDetail() {
         setTemplateAnalysis(null);
         setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
         setTemplateConfirmed(false);
-        toast.error(error instanceof Error ? error.message : "템플릿 필드 분석에 실패했습니다.");
+        toast.error(error instanceof Error ? error.message : "템플릿 필드 분석 중 오류가 발생했습니다.");
       })
       .finally(() => setAnalyzingTemplate(false));
   }, [projectId, uploadedTemplate]);
@@ -236,7 +257,7 @@ export function ProjectDetail() {
       endDate: projectForm.endDate,
     });
     setProject(updated);
-    toast.success("프로젝트 기본 정보를 저장했습니다.");
+    toast.success("프로젝트 정보가 저장되었습니다.");
   };
 
   const handleSaveBudgetRules = async () => {
@@ -244,22 +265,32 @@ export function ProjectDetail() {
     const totalBudget = Number(projectForm.totalBudget || 0);
     const savedRules = await api.replaceBudgetRules(projectId, buildBudgetPayload(budgetRules, totalBudget));
     setBudgetRules(groupBudgetRules(savedRules));
-    toast.success("예산 규칙을 저장했습니다.");
+    toast.success("예산 규칙이 저장되었습니다.");
   };
 
   const handleTemplateUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     if (!projectId) return;
     const file = event.target.files?.[0];
     if (!file) return;
+    setUploadingTemplate(true);
+    setTemplateUploadError(null);
 
-    await api.uploadProjectFile(projectId, "evidence-template", file);
-    await refreshTemplateFiles();
-    setShowFieldReview(false);
-    setTemplateConfirmed(false);
-    setTemplateAnalysis(null);
-    setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-    event.target.value = "";
-    toast.success(`${file.name} 템플릿을 업로드했습니다.`);
+    try {
+      await api.uploadProjectFile(projectId, "evidence-template", file);
+      await refreshTemplateFiles();
+      setShowFieldReview(false);
+      setTemplateConfirmed(false);
+      setTemplateAnalysis(null);
+      setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
+      toast.success(`${file.name} 템플릿이 업로드되었습니다.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "템플릿 업로드에 실패했습니다.";
+      setTemplateUploadError(message);
+      toast.error(message);
+    } finally {
+      event.target.value = "";
+      setUploadingTemplate(false);
+    }
   };
 
   const handleRemoveTemplate = async () => {
@@ -270,19 +301,41 @@ export function ProjectDetail() {
     setTemplateConfirmed(false);
     setTemplateAnalysis(null);
     setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-    toast.success("템플릿을 제거했습니다.");
+    toast.success("템플릿 파일이 삭제되었습니다.");
   };
 
   const handleConfirmTemplate = () => {
     setTemplateConfirmed(true);
     setShowFieldReview(false);
-    toast.success("템플릿 검토를 완료했습니다.");
+    toast.success("템플릿 검토가 확정되었습니다.");
   };
 
   const toggleFieldMapping = (fieldId: string) => {
     setTemplateFields((prev) =>
       prev.map((field) => (field.id === fieldId ? { ...field, mapped: !field.mapped } : field)),
     );
+  };
+
+  const handleUpdateTemplateField = (fieldId: string, patch: Partial<TemplateField>) => {
+    setTemplateFields((prev) =>
+      prev.map((field) => (field.id === fieldId ? { ...field, ...patch } : field)),
+    );
+  };
+
+  const handleRemoveTemplateField = (fieldId: string) => {
+    setTemplateFields((prev) => prev.filter((field) => field.id !== fieldId));
+  };
+
+  const handleAddTemplateField = () => {
+    setTemplateFields((prev) => [
+      ...prev,
+      {
+        id: `custom-${Date.now()}`,
+        placeholder: "{{ customField }}",
+        description: "??????類ㅼ벥 ?袁⑤굡",
+        mapped: true,
+      },
+    ]);
   };
 
   const handleAddCategory = () => {
@@ -355,6 +408,42 @@ export function ProjectDetail() {
     );
   };
 
+  const handleUpdateSubcategoryPercentage = (
+    ruleId: number,
+    subcategoryId: number,
+    percentageLimit: number,
+  ) => {
+    const safePercentage = Number.isFinite(percentageLimit) ? percentageLimit : 0;
+    handleUpdateSubcategory(ruleId, subcategoryId, {
+      percentageLimit: safePercentage,
+      allocatedAmount: calculateAllocatedAmount(totalBudgetAmount, safePercentage),
+    });
+  };
+
+  const handleUpdateSubcategoryAmount = (
+    ruleId: number,
+    subcategoryId: number,
+    allocatedAmount: number,
+  ) => {
+    const safeAmount = Number.isFinite(allocatedAmount) ? allocatedAmount : 0;
+    handleUpdateSubcategory(ruleId, subcategoryId, {
+      allocatedAmount: safeAmount,
+      percentageLimit: calculatePercentage(totalBudgetAmount, safeAmount),
+    });
+  };
+
+  useEffect(() => {
+    setBudgetRules((prev) =>
+      prev.map((rule) => ({
+        ...rule,
+        subcategories: rule.subcategories.map((subcategory) => ({
+          ...subcategory,
+          allocatedAmount: calculateAllocatedAmount(totalBudgetAmount, subcategory.percentageLimit),
+        })),
+      })),
+    );
+  }, [totalBudgetAmount]);
+
   return (
     <div className="space-y-6 p-4 md:p-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -366,18 +455,20 @@ export function ProjectDetail() {
           </Link>
           <div>
             <h1 className="text-2xl font-semibold text-gray-900">프로젝트 상세</h1>
-            <p className="mt-1 text-sm text-gray-600">기본 정보, 증빙문서 템플릿, 예산 규칙을 관리합니다.</p>
+            <p className="mt-1 text-sm text-gray-600">
+              프로젝트 정보, 증빙문서 템플릿, 예산 규칙을 한 화면에서 관리합니다.
+            </p>
           </div>
         </div>
         <Button className="w-full gap-2 sm:w-auto" onClick={() => void handleSaveProject()}>
           <Save className="h-4 w-4" />
-          기본 정보 저장
+          프로젝트 저장
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>기본 정보</CardTitle>
+          <CardTitle>프로젝트 정보</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -455,7 +546,7 @@ export function ProjectDetail() {
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="description">프로젝트 설명 / 제안서</Label>
+            <Label htmlFor="description">프로젝트 설명 / 메모</Label>
             <Textarea
               id="description"
               placeholder="프로젝트 설명을 입력하세요"
@@ -471,11 +562,12 @@ export function ProjectDetail() {
             <div className="flex items-center justify-between">
               <Label className="text-base font-semibold">증빙문서 템플릿</Label>
               <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
-                선택사항
+                업로드 준비
               </Badge>
             </div>
             <p className="text-sm text-gray-600">
-              증빙문서 생성을 위한 워드 또는 한글 템플릿을 업로드하세요. {"{{ date }}"}, {"{{ vendor }}"}, {"{{ amount }}"} 등의 필드가 자동으로 채워집니다.
+              증빙문서 생성을 위한 워드 또는 한글 템플릿을 업로드하세요. 업로드 후 추천 필드를 검토하고
+              필요하면 직접 수정할 수 있습니다.
             </p>
 
             {!uploadedTemplate ? (
@@ -485,19 +577,20 @@ export function ProjectDetail() {
                     <Upload className="h-6 w-6 text-blue-600" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium text-gray-900">문서 템플릿 업로드</p>
-                    <p className="mt-1 text-xs text-gray-600">.docx, .doc, .hwp 파일 지원</p>
+                    <p className="text-sm font-medium text-gray-900">템플릿 파일을 업로드하세요</p>
+                    <p className="mt-1 text-xs text-gray-600">.doc, .docx, .hwp, .hwpx 파일을 지원합니다</p>
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => document.getElementById("template-upload")?.click()}
+                    onClick={() => templateUploadInputRef.current?.click()}
+                    disabled={uploadingTemplate}
                   >
                     <Upload className="mr-2 h-4 w-4" />
-                    파일 선택
+                    {uploadingTemplate ? "업로드 중..." : "파일 업로드"}
                   </Button>
                   <input
-                    id="template-upload"
+                    ref={templateUploadInputRef}
                     type="file"
                     accept=".doc,.docx,.hwp,.hwpx"
                     onChange={(event) => void handleTemplateUpload(event)}
@@ -508,30 +601,28 @@ export function ProjectDetail() {
             ) : (
               <div className="space-y-3">
                 <div className="rounded-lg border border-blue-300 bg-blue-50 p-4">
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-3">
                       <div className="rounded-lg bg-blue-100 p-2">
                         <Upload className="h-5 w-5 text-blue-600" />
                       </div>
                       <div>
                         <p className="text-sm font-medium text-gray-900">{uploadedTemplate.originalFilename}</p>
-                        <p className="mt-1 text-xs text-gray-600">
-                          {(uploadedTemplate.size / 1024).toFixed(2)} KB
-                        </p>
+                        <p className="mt-1 text-xs text-gray-600">{(uploadedTemplate.size / 1024).toFixed(2)} KB</p>
                         <div className="mt-2 flex items-center gap-2">
                           {analyzingTemplate ? (
                             <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
-                              분석중
+                              분석 중
                             </Badge>
                           ) : templateConfirmed ? (
                             <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">
                               <CheckCircle className="mr-1 h-3 w-3" />
-                              확인완료
+                              매핑 확정
                             </Badge>
                           ) : (
                             <Badge variant="outline" className="border-yellow-200 bg-yellow-50 text-yellow-700">
                               <AlertCircle className="mr-1 h-3 w-3" />
-                              검토필요
+                              검토 필요
                             </Badge>
                           )}
                         </div>
@@ -542,7 +633,7 @@ export function ProjectDetail() {
                         variant="ghost"
                         size="sm"
                         onClick={() => setShowFieldReview(true)}
-                        disabled={analyzingTemplate}
+                        disabled={analyzingTemplate || uploadingTemplate}
                       >
                         <Eye className="mr-2 h-4 w-4" />
                         필드 검토
@@ -550,20 +641,33 @@ export function ProjectDetail() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => document.getElementById("template-upload")?.click()}
+                        onClick={() => templateUploadInputRef.current?.click()}
+                        disabled={uploadingTemplate}
                       >
-                        변경
+                        {uploadingTemplate ? "업로드 중..." : "다시 업로드"}
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleRemoveTemplate()}
-                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+                      {templateConfirmed ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled
+                          className="text-green-600 opacity-100"
+                        >
+                          <CheckCircle className="mr-2 h-4 w-4" />
+                          확정됨
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void handleRemoveTemplate()}
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
                       <input
-                        id="template-upload"
+                        ref={templateUploadInputRef}
                         type="file"
                         accept=".doc,.docx,.hwp,.hwpx"
                         onChange={(event) => void handleTemplateUpload(event)}
@@ -578,13 +682,25 @@ export function ProjectDetail() {
                     {templateAnalysis.warnings[0]}
                   </div>
                 ) : null}
+
+                {templateUploadError ? (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    템플릿 업로드 실패: {templateUploadError}
+                  </div>
+                ) : null}
               </div>
             )}
           </div>
 
           {showFieldReview && (
             <div className="space-y-4">
-              <h4 className="text-sm font-medium text-blue-900">템플릿 필드 검토</h4>
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium text-blue-900">템플릿 필드 검토</div>
+                <Button variant="outline" size="sm" onClick={handleAddTemplateField}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  필드 추가
+                </Button>
+              </div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -598,10 +714,18 @@ export function ProjectDetail() {
                   {templateFields.map((field) => (
                     <TableRow key={field.id}>
                       <TableCell>
-                        <Input value={field.placeholder} className="font-medium" readOnly />
+                        <Input
+                          value={field.placeholder}
+                          className="font-medium"
+                          onChange={(event) => handleUpdateTemplateField(field.id, { placeholder: event.target.value })}
+                        />
                       </TableCell>
                       <TableCell>
-                        <Input value={field.description} className="text-sm" readOnly />
+                        <Input
+                          value={field.description}
+                          className="text-sm"
+                          onChange={(event) => handleUpdateTemplateField(field.id, { description: event.target.value })}
+                        />
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
@@ -618,7 +742,12 @@ export function ProjectDetail() {
                         </Button>
                       </TableCell>
                       <TableCell>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => handleRemoveTemplateField(field.id)}
+                        >
                           <Trash2 className="h-4 w-4 text-red-600" />
                         </Button>
                       </TableCell>
@@ -628,13 +757,13 @@ export function ProjectDetail() {
               </Table>
               <div className="flex justify-end">
                 <Button variant="outline" size="sm" onClick={handleConfirmTemplate}>
-                  템플릿 확인
+                  템플릿 확정
                 </Button>
               </div>
             </div>
           )}
 
-          {project?.lastUpdated && <p className="text-xs text-gray-500">마지막 수정: {project.lastUpdated}</p>}
+          {project?.lastUpdated && <p className="text-xs text-gray-500">최종 수정: {project.lastUpdated}</p>}
         </CardContent>
       </Card>
 
@@ -648,7 +777,7 @@ export function ProjectDetail() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="text-sm text-gray-600">
-            예산 카테고리, 세부 항목, 각 항목의 비율 한도를 설정합니다. 각 세부 항목마다 개별 한도를 설정할 수 있습니다.
+            예산 카테고리와 세부 항목별 한도를 설정하세요. 퍼센트와 금액은 서로 동기화됩니다.
           </div>
 
           <div className="space-y-6">
@@ -659,7 +788,7 @@ export function ProjectDetail() {
                 <div key={rule.id} className="space-y-4 rounded-lg border border-gray-200 p-4">
                   <div className="flex items-center justify-between">
                     <div className="flex flex-1 items-center gap-3">
-                      <Label className="text-sm font-medium">카테고리명:</Label>
+                      <Label className="text-sm font-medium">카테고리명</Label>
                       <Input
                         value={rule.category}
                         placeholder="카테고리명을 입력하세요"
@@ -673,14 +802,14 @@ export function ProjectDetail() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium">세부 항목 및 한도:</Label>
+                    <Label className="text-sm font-medium">세부 항목 한도</Label>
                     <div className="space-y-2 border-l-2 border-blue-200 pl-4">
                       {rule.subcategories.map((subcategory) => (
-                        <div key={subcategory.id} className="flex items-center gap-2">
+                        <div key={subcategory.id} className="flex flex-wrap items-center gap-2">
                           <Input
                             value={subcategory.name}
                             placeholder="세부 항목명"
-                            className="flex-1 text-sm"
+                            className="flex-1 min-w-40 text-sm"
                             onChange={(event) =>
                               handleUpdateSubcategory(rule.id, subcategory.id, { name: event.target.value })
                             }
@@ -691,12 +820,21 @@ export function ProjectDetail() {
                               value={subcategory.percentageLimit}
                               className="w-20 text-right"
                               onChange={(event) =>
-                                handleUpdateSubcategory(rule.id, subcategory.id, {
-                                  percentageLimit: Number(event.target.value),
-                                })
+                                handleUpdateSubcategoryPercentage(rule.id, subcategory.id, Number(event.target.value))
                               }
                             />
                             <span className="w-4 text-sm text-gray-600">%</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              value={subcategory.allocatedAmount}
+                              className="w-28 text-right"
+                              onChange={(event) =>
+                                handleUpdateSubcategoryAmount(rule.id, subcategory.id, Number(event.target.value))
+                              }
+                            />
+                            <span className="text-sm text-gray-600">원</span>
                           </div>
                           <Button
                             variant="ghost"
@@ -716,18 +854,30 @@ export function ProjectDetail() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-sm font-medium">허용 지출 유형:</Label>
-                    <div className="pl-4 text-sm text-gray-600">
-                      {rule.allowedTypes.length > 0 ? rule.allowedTypes.join(", ") : "세부 항목명 기반으로 저장됩니다."}
+                    <Label className="text-sm font-medium">허용된 규칙 설명</Label>
+                    <div className="space-y-2 border-l-2 border-blue-200 pl-4">
+                      {rule.subcategories.map((subcategory) => (
+                        <div key={`${rule.id}-${subcategory.id}-rule-description`} className="flex flex-col gap-2 md:flex-row md:items-center">
+                          <div className="w-full text-sm font-medium text-gray-700 md:w-40">{subcategory.name || "세부 항목"}</div>
+                          <Input
+                            value={subcategory.ruleDescription}
+                            placeholder="예: 복사용지, 사무용품, 소모품"
+                            className="flex-1 text-sm"
+                            onChange={(event) =>
+                              handleUpdateSubcategory(rule.id, subcategory.id, { ruleDescription: event.target.value })
+                            }
+                          />
+                        </div>
+                      ))}
+                      {rule.subcategories.length === 0 ? (
+                        <div className="text-sm text-gray-500">아직 연결된 규칙 설명이 없습니다.</div>
+                      ) : null}
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between border-t border-gray-200 pt-3">
-                    <span className="text-sm text-gray-600">세부 항목 한도 합계:</span>
-                    <Badge
-                      variant="outline"
-                      className="border-blue-200 bg-blue-50 text-blue-700"
-                    >
+                    <span className="text-sm text-gray-600">세부 항목 합계 비율</span>
+                    <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
                       {totalSubcategoryLimit}%
                     </Badge>
                   </div>
@@ -739,13 +889,11 @@ export function ProjectDetail() {
           <Separator className="my-4" />
 
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-            <h4 className="mb-2 text-sm font-medium text-blue-900">규칙 요약</h4>
+            <h4 className="mb-2 text-sm font-medium text-blue-900">예산 규칙 요약</h4>
             <div className="space-y-1 text-sm text-blue-800">
-              <div>총 카테고리 수: {budgetRules.length}개</div>
-              <div>
-                총 세부 항목 수: {budgetRules.reduce((sum, rule) => sum + rule.subcategories.length, 0)}개
-              </div>
-              <div>각 카테고리별 한도는 프로젝트 운영 기준에 맞게 자유롭게 설정할 수 있습니다.</div>
+              <div>등록된 카테고리: {budgetRules.length}개</div>
+              <div>등록된 세부 항목: {budgetRules.reduce((sum, rule) => sum + rule.subcategories.length, 0)}개</div>
+              <div>세부항목별 퍼센트와 금액은 총 예산 기준으로 자동 계산되며, 직접 수정해도 서로 동기화됩니다.</div>
             </div>
           </div>
 

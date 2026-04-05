@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
+import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -30,14 +32,20 @@ import java.util.regex.Pattern;
 @Service
 public class ReceiptOcrService {
 
-    private static final Pattern DATE_PATTERN = Pattern.compile("(20\\d{2})[./-]\\s*(\\d{1,2})[./-]\\s*(\\d{1,2})");
-    private static final Pattern AMOUNT_PATTERN = Pattern.compile("(?:krw\\s*|₩\\s*|￦\\s*)?([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{4,})", Pattern.CASE_INSENSITIVE);
-    private static final Pattern ITEM_PATTERN = Pattern.compile("(?:item|description|menu|product|품목|상품명|메뉴|내역)\\s*[:：]?\\s*(.+)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern QUANTITY_PATTERN = Pattern.compile("(?:qty|quantity|ea|수량|개수)\\s*[:：xX]?\\s*(\\d+(?:[.,]\\d+)?)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern UNIT_PRICE_PATTERN = Pattern.compile("(?:unit\\s*price|price|단가)\\s*[:：]?\\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,6})", Pattern.CASE_INSENSITIVE);
-    private static final Pattern LINE_ITEM_PATTERN = Pattern.compile("(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*[xX]\\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{1,6})");
+    private static final Pattern DATE_PATTERN = Pattern.compile("(20\\d{2})\\s*[./-]\\s*(\\d{1,2})\\s*[./-]\\s*(\\d{1,2})");
+    private static final Pattern KOREAN_DATE_PATTERN = Pattern.compile("(20\\d{2})\\s*년\\s*(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일");
+    private static final Pattern COMPACT_DATE_PATTERN = Pattern.compile("(20\\d{2})(\\d{2})(\\d{2})");
+    private static final Pattern AMOUNT_PATTERN = Pattern.compile("(?:krw\\s*|￦\\s*|원\\s*)?([0-9oO]{1,3}(?:,[0-9oO]{3})+|[0-9oO]{4,})", Pattern.CASE_INSENSITIVE);
+    private static final Pattern ITEM_PATTERN = Pattern.compile("(?:item|description|menu|product|내역|품명|메뉴)\\s*[:\\s-]*\\s*(.+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern QUANTITY_PATTERN = Pattern.compile("(?:qty|quantity|ea|수량|개수)\\s*[:xX*]?\\s*(\\d+(?:[.,]\\d+)?)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern UNIT_PRICE_PATTERN = Pattern.compile("(?:unit\\s*price|price|단가)\\s*[:\\s-]*\\s*([0-9oO]{1,3}(?:,[0-9oO]{3})+|[0-9oO]{1,6})", Pattern.CASE_INSENSITIVE);
+    private static final Pattern LINE_ITEM_PATTERN = Pattern.compile("(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*[xX*]\\s*([0-9oO]{1,3}(?:,[0-9oO]{3})+|[0-9oO]{1,6})");
     private static final int PDF_RENDER_DPI = 300;
     private static final int PDF_MAX_PAGES = 3;
+    private static final Set<String> UNIT_TOKENS = Set.of(
+            "ea", "pcs", "pc", "box", "set", "kg", "g", "ml", "l", "m", "cm", "mm",
+            "개", "박스", "세트"
+    );
 
     private final FileStorageService fileStorageService;
     private final String ocrCommand;
@@ -61,12 +69,12 @@ public class ReceiptOcrService {
         Path storedPath = Path.of(storedFile.path());
 
         if (!isSupportedFile(storedPath)) {
-            return unsupportedResult(storedFile, "Only image files and PDFs are supported for OCR.");
+            return unsupportedResult(storedFile, "OCR은 이미지 파일과 PDF만 지원합니다.");
         }
 
         Optional<String> rawText = extractText(storedPath);
         if (rawText.isEmpty()) {
-            return unavailableResult(storedFile, "Tesseract OCR is not available. Install it and set OCR_COMMAND if needed.");
+            return unavailableResult(storedFile, "Tesseract OCR을 사용할 수 없습니다. 필요하면 설치 후 OCR_COMMAND를 설정해 주세요.");
         }
 
         String extractedText = rawText.get().trim();
@@ -90,7 +98,7 @@ public class ReceiptOcrService {
         if (isPdf(storedPath)) {
             return extractTextFromPdf(storedPath);
         }
-        return runTesseract(storedPath);
+        return runBestOcr(storedPath);
     }
 
     private Optional<String> extractTextFromPdf(Path pdfPath) throws IOException {
@@ -106,7 +114,7 @@ public class ReceiptOcrService {
 
                 try {
                     ImageIO.write(image, "png", tempImage.toFile());
-                    Optional<String> pageText = runTesseract(tempImage);
+                    Optional<String> pageText = runBestOcr(tempImage);
                     pageText.filter(text -> !text.isBlank()).ifPresent(pageTexts::add);
                 } finally {
                     Files.deleteIfExists(tempImage);
@@ -121,6 +129,85 @@ public class ReceiptOcrService {
         return Optional.of(String.join(System.lineSeparator() + System.lineSeparator(), pageTexts));
     }
 
+    private Optional<String> runBestOcr(Path inputPath) throws IOException {
+        List<String> candidates = new ArrayList<>();
+        runTesseract(inputPath).filter(text -> !text.isBlank()).ifPresent(candidates::add);
+
+        BufferedImage image = ImageIO.read(inputPath.toFile());
+        if (image != null) {
+            Path preprocessed = Files.createTempFile("receipt-ocr-preprocessed-", ".png");
+            try {
+                ImageIO.write(preprocessForOcr(image), "png", preprocessed.toFile());
+                runTesseract(preprocessed).filter(text -> !text.isBlank()).ifPresent(candidates::add);
+            } finally {
+                Files.deleteIfExists(preprocessed);
+            }
+        }
+
+        return candidates.stream()
+                .max(Comparator.comparingInt(this::scoreOcrCandidate));
+    }
+
+    private BufferedImage preprocessForOcr(BufferedImage source) {
+        BufferedImage output = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_BYTE_BINARY);
+        int threshold = calculateOtsuThreshold(source);
+        for (int y = 0; y < source.getHeight(); y++) {
+            for (int x = 0; x < source.getWidth(); x++) {
+                Color color = new Color(source.getRGB(x, y));
+                int luminance = (int) (0.299 * color.getRed() + 0.587 * color.getGreen() + 0.114 * color.getBlue());
+                int binary = luminance < threshold ? 0 : 255;
+                output.setRGB(x, y, new Color(binary, binary, binary).getRGB());
+            }
+        }
+        return output;
+    }
+
+    private int calculateOtsuThreshold(BufferedImage source) {
+        int[] histogram = new int[256];
+        for (int y = 0; y < source.getHeight(); y++) {
+            for (int x = 0; x < source.getWidth(); x++) {
+                Color color = new Color(source.getRGB(x, y));
+                int luminance = (int) (0.299 * color.getRed() + 0.587 * color.getGreen() + 0.114 * color.getBlue());
+                histogram[luminance]++;
+            }
+        }
+
+        int total = source.getWidth() * source.getHeight();
+        float sum = 0;
+        for (int index = 0; index < 256; index++) {
+            sum += index * histogram[index];
+        }
+
+        float sumBackground = 0;
+        int weightBackground = 0;
+        float maxVariance = 0;
+        int threshold = 128;
+
+        for (int index = 0; index < 256; index++) {
+            weightBackground += histogram[index];
+            if (weightBackground == 0) {
+                continue;
+            }
+
+            int weightForeground = total - weightBackground;
+            if (weightForeground == 0) {
+                break;
+            }
+
+            sumBackground += (float) index * histogram[index];
+            float meanBackground = sumBackground / weightBackground;
+            float meanForeground = (sum - sumBackground) / weightForeground;
+            float varianceBetween = (float) weightBackground * weightForeground * (meanBackground - meanForeground) * (meanBackground - meanForeground);
+
+            if (varianceBetween > maxVariance) {
+                maxVariance = varianceBetween;
+                threshold = index;
+            }
+        }
+
+        return threshold;
+    }
+
     private Optional<String> runTesseract(Path inputPath) {
         Path outputBase = null;
         try {
@@ -132,7 +219,9 @@ public class ReceiptOcrService {
                     inputPath.toString(),
                     outputBase.toString(),
                     "-l",
-                    ocrLanguage
+                    ocrLanguage,
+                    "--psm",
+                    "6"
             ).redirectErrorStream(true).start();
 
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
@@ -194,16 +283,22 @@ public class ReceiptOcrService {
         return path.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".pdf");
     }
 
-    private ParsedReceiptFields parseFields(String rawText) {
-        List<String> lines = rawText.lines()
+    ParsedReceiptFields parseFields(String rawText) {
+        String normalizedText = normalizeOcrText(rawText);
+        List<String> rawLines = normalizedText.lines()
                 .map(String::trim)
                 .filter(line -> !line.isBlank())
                 .toList();
+        List<String> lines = rawLines.stream()
+                .map(String::trim)
+                .map(this::normalizeLine)
+                .filter(line -> !line.isBlank())
+                .toList();
 
-        List<ReceiptLineItem> lineItems = extractLineItems(lines);
+        List<ReceiptLineItem> lineItems = extractLineItems(rawLines, lines);
         ReceiptLineItem primaryLineItem = lineItems.isEmpty() ? null : lineItems.get(0);
 
-        LocalDate paymentDate = extractDate(rawText).orElse(null);
+        LocalDate paymentDate = extractDate(normalizedText).orElse(null);
         String vendor = extractVendor(lines).orElse(null);
         String itemName = Optional.ofNullable(primaryLineItem)
                 .map(ReceiptLineItem::itemName)
@@ -220,8 +315,8 @@ public class ReceiptOcrService {
         BigDecimal amount = extractAmount(lines).orElseGet(() ->
                 Optional.ofNullable(primaryLineItem).map(ReceiptLineItem::amount).orElse(null)
         );
-        String paymentMethod = extractPaymentMethod(rawText).orElse(null);
-        String category = inferCategory(rawText, itemName);
+        String paymentMethod = extractPaymentMethod(normalizedText).orElse(null);
+        String category = inferCategory(normalizedText, itemName);
         String subcategory = inferSubcategory(category, itemName);
 
         if (quantity != null && unitPrice != null && amount == null) {
@@ -231,8 +326,60 @@ public class ReceiptOcrService {
         return new ParsedReceiptFields(paymentDate, vendor, itemName, quantity, unitPrice, amount, paymentMethod, category, subcategory, lineItems);
     }
 
+    private String normalizeOcrText(String rawText) {
+        return rawText
+                .replace('\u00A0', ' ')
+                .replace('：', ':')
+                .replace('．', '.')
+                .replace('，', ',')
+                .replace('／', '/')
+                .replace('－', '-')
+                .replaceAll("[|¦]", " ")
+                .replaceAll("\r", "");
+    }
+
+    private String normalizeLine(String line) {
+        String normalized = line.trim()
+                .replaceAll("\\s{2,}", " ")
+                .replaceAll("([0-9])\\s+([0-9])", "$1$2");
+        return normalizeNumericNoise(normalized);
+    }
+
+    private String normalizeNumericNoise(String text) {
+        return text
+                .replaceAll("(?<=[0-9,])[oO](?=[0-9,oO])", "0")
+                .replaceAll("(?<=[0-9])[oO]\\b", "0");
+    }
+
     private Optional<LocalDate> extractDate(String rawText) {
-        Matcher matcher = DATE_PATTERN.matcher(rawText);
+        Optional<LocalDate> date = extractDate(rawText, DATE_PATTERN);
+        if (date.isPresent()) {
+            return date;
+        }
+
+        date = extractDate(rawText, KOREAN_DATE_PATTERN);
+        if (date.isPresent()) {
+            return date;
+        }
+
+        Matcher compactMatcher = COMPACT_DATE_PATTERN.matcher(rawText.replaceAll("\\s+", ""));
+        if (!compactMatcher.find()) {
+            return Optional.empty();
+        }
+
+        try {
+            return Optional.of(LocalDate.of(
+                    Integer.parseInt(compactMatcher.group(1)),
+                    Integer.parseInt(compactMatcher.group(2)),
+                    Integer.parseInt(compactMatcher.group(3))
+            ));
+        } catch (RuntimeException exception) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<LocalDate> extractDate(String rawText, Pattern pattern) {
+        Matcher matcher = pattern.matcher(rawText);
         if (!matcher.find()) {
             return Optional.empty();
         }
@@ -250,27 +397,79 @@ public class ReceiptOcrService {
 
     private Optional<String> extractVendor(List<String> lines) {
         return lines.stream()
-                .filter(line -> line.length() >= 2)
-                .filter(line -> !containsAny(line.toLowerCase(Locale.ROOT), "receipt", "approved", "total", "vat", "business", "영수증", "승인", "합계", "사업자"))
-                .findFirst();
+                .limit(8)
+                .filter(this::looksLikeVendorLine)
+                .max(Comparator.comparingInt(this::vendorScore))
+                .map(String::trim);
+    }
+
+    private boolean looksLikeVendorLine(String line) {
+        String normalized = line.toLowerCase(Locale.ROOT);
+        if (line.length() < 2 || line.length() > 40) {
+            return false;
+        }
+        if (containsAny(normalized,
+                "receipt", "approved", "total", "subtotal", "vat", "business", "card", "cash", "fax", "tel",
+                "영수증", "합계", "총액", "공급가액", "부가세", "카드", "현금", "전화", "사업자", "승인")) {
+            return false;
+        }
+        if (DATE_PATTERN.matcher(line).find() || KOREAN_DATE_PATTERN.matcher(line).find() || COMPACT_DATE_PATTERN.matcher(line).find()) {
+            return false;
+        }
+        long digitCount = line.chars().filter(Character::isDigit).count();
+        return digitCount < Math.max(5, line.length() / 2);
+    }
+
+    private int vendorScore(String line) {
+        int score = 0;
+        if (line.matches(".*[가-힣A-Za-z].*")) {
+            score += 2;
+        }
+        if (!line.contains(":")) {
+            score += 1;
+        }
+        if (line.length() >= 3 && line.length() <= 20) {
+            score += 2;
+        }
+        if (line.contains("점") || line.contains("스토어") || line.contains("상사") || line.contains("마트")) {
+            score += 2;
+        }
+        return score;
     }
 
     private Optional<String> extractItemName(List<String> lines) {
         for (String line : lines) {
             Matcher matcher = ITEM_PATTERN.matcher(line);
             if (matcher.find()) {
-                return Optional.of(matcher.group(1).trim());
+                return Optional.of(cleanCandidateText(matcher.group(1)));
             }
         }
 
         return lines.stream()
                 .filter(line -> line.length() >= 2)
-                .filter(line -> !containsAny(line.toLowerCase(Locale.ROOT), "receipt", "total", "vat", "card", "cash", "영수증", "합계", "현금", "카드"))
+                .filter(this::looksLikeItemLine)
                 .skip(1)
-                .findFirst();
+                .findFirst()
+                .map(this::cleanCandidateText);
     }
 
-    private List<ReceiptLineItem> extractLineItems(List<String> lines) {
+    private boolean looksLikeItemLine(String line) {
+        String normalized = line.toLowerCase(Locale.ROOT);
+        if (containsAny(normalized,
+                "receipt", "total", "subtotal", "vat", "card", "cash",
+                "영수증", "합계", "총액", "현금", "카드", "부가세", "공급가액")) {
+            return false;
+        }
+        long digitCount = line.chars().filter(Character::isDigit).count();
+        return digitCount < Math.max(4, line.length() / 2);
+    }
+
+    private List<ReceiptLineItem> extractLineItems(List<String> rawLines, List<String> lines) {
+        List<ReceiptLineItem> columnarItems = extractColumnarLineItems(rawLines);
+        if (!columnarItems.isEmpty()) {
+            return columnarItems;
+        }
+
         List<ReceiptLineItem> lineItems = new ArrayList<>();
 
         for (String line : lines) {
@@ -285,20 +484,227 @@ public class ReceiptOcrService {
                 continue;
             }
 
-            String itemName = matcher.group(1).trim();
+            String itemName = cleanCandidateText(matcher.group(1));
             if (itemName.length() < 2 || containsAny(itemName.toLowerCase(Locale.ROOT), "total", "합계", "subtotal")) {
                 continue;
             }
 
             lineItems.add(new ReceiptLineItem(
                     itemName,
+                    null,
                     quantity.get(),
+                    null,
                     unitPrice.get(),
                     quantity.get().multiply(unitPrice.get())
             ));
         }
 
         return lineItems;
+    }
+
+    private List<ReceiptLineItem> extractColumnarLineItems(List<String> rawLines) {
+        List<ReceiptLineItem> headerDrivenItems = extractHeaderDrivenLineItems(rawLines);
+        if (!headerDrivenItems.isEmpty()) {
+            return headerDrivenItems;
+        }
+
+        List<ReceiptLineItem> lineItems = new ArrayList<>();
+
+        for (String rawLine : rawLines) {
+            String line = rawLine.trim();
+            if (line.isBlank() || !containsEnoughNumericSignals(line)) {
+                continue;
+            }
+
+            String[] columns = line.split("\\s{2,}|\\t+");
+            if (columns.length < 4 || columns.length > 6) {
+                continue;
+            }
+
+            ReceiptLineItem parsed = parseColumnarLineItem(columns);
+            if (parsed != null) {
+                lineItems.add(parsed);
+            }
+        }
+
+        return lineItems;
+    }
+
+    private List<ReceiptLineItem> extractHeaderDrivenLineItems(List<String> rawLines) {
+        int headerIndex = findLineItemHeaderIndex(rawLines);
+        if (headerIndex < 0) {
+            return List.of();
+        }
+
+        List<ReceiptLineItem> lineItems = new ArrayList<>();
+        for (int index = headerIndex + 1; index < rawLines.size(); index++) {
+            String rawLine = rawLines.get(index).trim();
+            if (rawLine.isBlank()) {
+                continue;
+            }
+            if (containsAny(rawLine.toLowerCase(Locale.ROOT), "합계", "총액", "subtotal", "total", "결제", "금액")) {
+                break;
+            }
+
+            ReceiptLineItem parsed = parseHeaderDrivenLine(rawLine);
+            if (parsed != null) {
+                lineItems.add(parsed);
+            }
+        }
+        return lineItems;
+    }
+
+    private int findLineItemHeaderIndex(List<String> rawLines) {
+        for (int index = 0; index < rawLines.size(); index++) {
+            String normalized = normalizeForHeader(rawLines.get(index));
+            int matchCount = 0;
+            if (normalized.contains("품명") || normalized.contains("내역")) matchCount++;
+            if (normalized.contains("규격")) matchCount++;
+            if (normalized.contains("수량")) matchCount++;
+            if (normalized.contains("단위")) matchCount++;
+            if (normalized.contains("단가")) matchCount++;
+            if (normalized.contains("금액")) matchCount++;
+            if (matchCount >= 3) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private String normalizeForHeader(String line) {
+        return line.replaceAll("\\s+", "");
+    }
+
+    private ReceiptLineItem parseHeaderDrivenLine(String rawLine) {
+        String line = normalizeNumericNoise(rawLine.trim());
+        String[] wideColumns = line.split("\\s{2,}|\\t+");
+        if (wideColumns.length >= 4) {
+            ReceiptLineItem parsedWide = parseColumnarLineItem(wideColumns);
+            if (parsedWide != null) {
+                return parsedWide;
+            }
+        }
+
+        String[] tokens = line.split("\\s+");
+        if (tokens.length < 4) {
+            return null;
+        }
+
+        BigDecimal amount = parseDecimal(tokens[tokens.length - 1]).orElse(null);
+        BigDecimal unitPrice = parseDecimal(tokens[tokens.length - 2]).orElse(null);
+        if (amount == null || unitPrice == null) {
+            return null;
+        }
+
+        int quantityIndex = -1;
+        for (int index = tokens.length - 3; index >= 0; index--) {
+            if (parseDecimal(tokens[index]).isPresent()) {
+                quantityIndex = index;
+                break;
+            }
+        }
+        if (quantityIndex < 0) {
+            return null;
+        }
+
+        BigDecimal quantity = parseDecimal(tokens[quantityIndex]).orElse(null);
+        if (quantity == null) {
+            return null;
+        }
+
+        String unit = null;
+        if (quantityIndex + 1 < tokens.length - 2 && isLikelyUnit(tokens[quantityIndex + 1])) {
+            unit = tokens[quantityIndex + 1];
+        }
+
+        List<String> prefixTokens = new ArrayList<>();
+        for (int index = 0; index < quantityIndex; index++) {
+            prefixTokens.add(tokens[index]);
+        }
+        if (prefixTokens.isEmpty()) {
+            return null;
+        }
+
+        String itemName = cleanCandidateText(prefixTokens.get(0));
+        String spec = prefixTokens.size() > 1
+                ? cleanCandidateText(String.join(" ", prefixTokens.subList(1, prefixTokens.size())))
+                : null;
+
+        if (itemName.length() < 2) {
+            return null;
+        }
+
+        return new ReceiptLineItem(itemName, spec, quantity, unit, unitPrice, amount);
+    }
+
+    private boolean containsEnoughNumericSignals(String line) {
+        long digitCount = line.chars().filter(Character::isDigit).count();
+        return digitCount >= 3;
+    }
+
+    private ReceiptLineItem parseColumnarLineItem(String[] columns) {
+        List<String> values = new ArrayList<>();
+        for (String column : columns) {
+            String cleaned = cleanCandidateText(normalizeNumericNoise(column));
+            if (!cleaned.isBlank()) {
+                values.add(cleaned);
+            }
+        }
+
+        if (values.size() < 4 || values.size() > 6) {
+            return null;
+        }
+
+        String itemName = cleanCandidateText(values.get(0));
+        if (itemName.length() < 2 || containsAny(itemName.toLowerCase(Locale.ROOT), "합계", "총액", "subtotal", "total")) {
+            return null;
+        }
+
+        String spec = null;
+        String unit = null;
+        BigDecimal quantity;
+        BigDecimal unitPrice;
+        BigDecimal amount;
+
+        try {
+            if (values.size() == 6) {
+                spec = values.get(1);
+                quantity = parseDecimal(values.get(2)).orElse(null);
+                unit = values.get(3);
+                unitPrice = parseDecimal(values.get(4)).orElse(null);
+                amount = parseDecimal(values.get(5)).orElse(null);
+            } else if (values.size() == 5 && isLikelyUnit(values.get(3))) {
+                spec = values.get(1);
+                quantity = parseDecimal(values.get(2)).orElse(null);
+                unit = values.get(3);
+                unitPrice = parseDecimal(values.get(4)).orElse(null);
+                amount = quantity != null && unitPrice != null ? quantity.multiply(unitPrice) : null;
+            } else if (values.size() == 5) {
+                spec = values.get(1);
+                quantity = parseDecimal(values.get(2)).orElse(null);
+                unitPrice = parseDecimal(values.get(3)).orElse(null);
+                amount = parseDecimal(values.get(4)).orElse(null);
+            } else {
+                quantity = parseDecimal(values.get(1)).orElse(null);
+                unitPrice = parseDecimal(values.get(2)).orElse(null);
+                amount = parseDecimal(values.get(3)).orElse(null);
+            }
+        } catch (RuntimeException exception) {
+            return null;
+        }
+
+        if (quantity == null || unitPrice == null) {
+            return null;
+        }
+        if (amount == null) {
+            amount = quantity.multiply(unitPrice);
+        }
+
+        return new ReceiptLineItem(itemName, spec, quantity, unit, unitPrice, amount);
+    }
+
+    private boolean isLikelyUnit(String value) {
+        return UNIT_TOKENS.contains(value.toLowerCase(Locale.ROOT));
     }
 
     private Optional<BigDecimal> extractQuantity(List<String> lines) {
@@ -322,21 +728,22 @@ public class ReceiptOcrService {
     }
 
     private Optional<BigDecimal> extractAmount(List<String> lines) {
-        List<BigDecimal> candidates = new ArrayList<>();
+        List<BigDecimal> priorityCandidates = new ArrayList<>();
+        List<BigDecimal> allCandidates = new ArrayList<>();
 
         for (String line : lines) {
-            if (containsAny(line.toLowerCase(Locale.ROOT), "total", "amount", "paid", "합계", "총액", "결제")) {
-                candidates.addAll(findAmounts(line));
+            List<BigDecimal> found = findAmounts(line);
+            if (containsAny(line.toLowerCase(Locale.ROOT), "total", "amount", "paid", "합계", "총액", "결제", "청구", "금액")) {
+                priorityCandidates.addAll(found);
             }
+            allCandidates.addAll(found);
         }
 
-        if (candidates.isEmpty()) {
-            for (String line : lines) {
-                candidates.addAll(findAmounts(line));
-            }
+        if (!priorityCandidates.isEmpty()) {
+            return priorityCandidates.stream().max(Comparator.naturalOrder());
         }
 
-        return candidates.stream().max(Comparator.naturalOrder());
+        return allCandidates.stream().max(Comparator.naturalOrder());
     }
 
     private List<BigDecimal> findAmounts(String line) {
@@ -354,7 +761,11 @@ public class ReceiptOcrService {
         }
 
         try {
-            return Optional.of(new BigDecimal(value.replace(",", "")));
+            return Optional.of(new BigDecimal(
+                    value.replace(",", "")
+                            .replace("O", "0")
+                            .replace("o", "0")
+            ));
         } catch (NumberFormatException exception) {
             return Optional.empty();
         }
@@ -368,7 +779,7 @@ public class ReceiptOcrService {
         if (containsAny(normalized, "cash", "현금")) {
             return Optional.of("cash");
         }
-        if (containsAny(normalized, "transfer", "bank", "계좌")) {
+        if (containsAny(normalized, "transfer", "bank", "계좌", "이체")) {
             return Optional.of("bank");
         }
         return Optional.empty();
@@ -408,39 +819,60 @@ public class ReceiptOcrService {
 
     private double estimateConfidence(ParsedReceiptFields fields, String rawText) {
         int score = 0;
-        if (fields.paymentDate() != null) score++;
-        if (fields.vendor() != null) score++;
-        if (fields.itemName() != null) score++;
-        if (fields.quantity() != null) score++;
-        if (fields.unitPrice() != null) score++;
-        if (fields.amount() != null) score++;
-        if (fields.paymentMethod() != null) score++;
-        if (!fields.lineItems().isEmpty()) score++;
-        if (!rawText.isBlank()) score++;
-        return Math.min(0.98d, 0.2d + (score * 0.085d));
+        if (fields.paymentDate() != null) score += 2;
+        if (fields.vendor() != null) score += 2;
+        if (fields.itemName() != null) score += 2;
+        if (fields.quantity() != null) score += 1;
+        if (fields.unitPrice() != null) score += 1;
+        if (fields.amount() != null) score += 2;
+        if (fields.paymentMethod() != null) score += 1;
+        if (!fields.lineItems().isEmpty()) score += 2;
+        if (!rawText.isBlank()) score += 1;
+        if (rawText.lines().count() >= 3) score += 1;
+        return Math.min(0.98d, 0.18d + (score * 0.065d));
     }
 
     private List<String> buildWarnings(ParsedReceiptFields fields) {
         List<String> warnings = new ArrayList<>();
         if (fields.vendor() == null) {
-            warnings.add("Could not detect the vendor automatically.");
+            warnings.add("거래처를 자동으로 인식하지 못했습니다.");
         }
         if (fields.itemName() == null) {
-            warnings.add("Could not detect the item name automatically.");
-        }
-        if (fields.quantity() == null && fields.lineItems().isEmpty()) {
-            warnings.add("Could not detect the quantity automatically.");
+            warnings.add("항목명을 자동으로 인식하지 못했습니다.");
         }
         if (fields.unitPrice() == null && fields.lineItems().isEmpty()) {
-            warnings.add("Could not detect the unit price automatically.");
+            warnings.add("단가를 자동으로 인식하지 못했습니다.");
         }
         if (fields.amount() == null) {
-            warnings.add("Could not detect the total amount automatically.");
+            warnings.add("총 금액을 자동으로 인식하지 못했습니다.");
         }
         if (fields.paymentDate() == null) {
-            warnings.add("Could not detect the payment date automatically.");
+            warnings.add("결제일자를 자동으로 인식하지 못했습니다.");
+        }
+        if (fields.lineItems().isEmpty()) {
+            warnings.add("품목 행을 인식하지 못했습니다. 수량과 단가를 직접 확인해 주세요.");
         }
         return warnings;
+    }
+
+    private int scoreOcrCandidate(String text) {
+        ParsedReceiptFields fields = parseFields(text);
+        int score = 0;
+        if (fields.paymentDate() != null) score += 4;
+        if (fields.vendor() != null) score += 3;
+        if (fields.itemName() != null) score += 3;
+        if (fields.amount() != null) score += 4;
+        if (!fields.lineItems().isEmpty()) score += 4;
+        score += Math.min(5, (int) text.lines().filter(line -> !line.isBlank()).count());
+        return score;
+    }
+
+    private String cleanCandidateText(String text) {
+        return text.trim()
+                .replaceAll("\\s{2,}", " ")
+                .replaceAll("^[\\-:]+", "")
+                .replaceAll("[\\-:]+$", "")
+                .trim();
     }
 
     private boolean containsAny(String text, String... keywords) {
@@ -512,7 +944,9 @@ public class ReceiptOcrService {
 
     public record ReceiptLineItem(
             String itemName,
+            String spec,
             BigDecimal quantity,
+            String unit,
             BigDecimal unitPrice,
             BigDecimal amount
     ) {

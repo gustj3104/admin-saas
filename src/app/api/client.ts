@@ -3,16 +3,55 @@ import type {
   DashboardOverview,
   EvidenceDocument,
   Expense,
+  NormalizedTemplateContent,
   Project,
   ProjectFile,
   ReceiptOcrResult,
   Settlement,
+  EvidencePreview,
+  InspectionReportGenerateEntry,
+  InspectionReportGenerateResponse,
+  TemplateDetail,
+  TemplateExtractionResponse,
   TemplateFieldAnalysis,
+  InspectionReportExportMode,
+  TemplateMappingSchema,
+  UploadedTemplate,
   UploadedFile,
   ValidationResult,
 } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api";
+
+type ApiErrorPayload = {
+  message?: string;
+  details?: string[];
+};
+
+async function extractErrorMessage(response: Response, fallback: string): Promise<string> {
+  const raw = await response.text();
+  if (!raw) {
+    return fallback;
+  }
+
+  try {
+    const payload = JSON.parse(raw) as ApiErrorPayload;
+    const details = payload.details?.filter(Boolean) ?? [];
+    if (payload.message && details.length > 0) {
+      return `${payload.message}: ${details.join(", ")}`;
+    }
+    if (payload.message) {
+      return payload.message;
+    }
+    if (details.length > 0) {
+      return details.join(", ");
+    }
+  } catch {
+    // Fall through to the raw response text for non-JSON errors.
+  }
+
+  return raw;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -24,8 +63,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed: ${response.status}`);
+    throw new Error(await extractErrorMessage(response, `요청에 실패했습니다: ${response.status}`));
   }
 
   if (response.status === 204) {
@@ -42,8 +80,7 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Upload failed: ${response.status}`);
+    throw new Error(await extractErrorMessage(response, `업로드에 실패했습니다: ${response.status}`));
   }
 
   return response.json() as Promise<T>;
@@ -52,8 +89,7 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
 async function download(path: string, init?: RequestInit): Promise<Blob> {
   const response = await fetch(`${API_BASE}${path}`, init);
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Download failed: ${response.status}`);
+    throw new Error(await extractErrorMessage(response, `다운로드에 실패했습니다: ${response.status}`));
   }
   return response.blob();
 }
@@ -101,6 +137,11 @@ export const api = {
     request<Expense>(`/expenses/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload),
+    }),
+  updateExpenseStatus: (id: number, status: "PENDING" | "PROCESSED") =>
+    request<Expense>(`/expenses/${id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
     }),
   deleteExpense: (id: number) =>
     request<void>(`/expenses/${id}`, {
@@ -152,6 +193,8 @@ export const api = {
     request<ProjectFile[]>(`/projects/${projectId}/files${category ? `?category=${encodeURIComponent(category)}` : ""}`),
   inspectProjectTemplateFields: (projectId: number, path: string) =>
     request<TemplateFieldAnalysis>(`/projects/${projectId}/files/template-fields?path=${encodeURIComponent(path)}`),
+  extractProjectTemplate: (projectId: number, path: string) =>
+    request<TemplateExtractionResponse>(`/projects/${projectId}/files/template-extract?path=${encodeURIComponent(path)}`),
   downloadProjectFile: async (projectId: number, path: string, filename: string) => {
     const blob = await download(`/projects/${projectId}/files/download?path=${encodeURIComponent(path)}`);
     triggerFileDownload(blob, filename);
@@ -164,6 +207,56 @@ export const api = {
     const formData = new FormData();
     formData.append("file", file);
     return upload<ReceiptOcrResult>(`/projects/${projectId}/files/receipt-ocr`, formData);
+  },
+  uploadTemplate: (file: File, structuredContent?: NormalizedTemplateContent) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (structuredContent) {
+      formData.append("structuredContent", JSON.stringify(structuredContent));
+    }
+    return upload<UploadedTemplate>("/templates", formData);
+  },
+  uploadTemplateJson: (payload: { filename: string; contentType: string; structuredContent: NormalizedTemplateContent }) =>
+    request<UploadedTemplate>("/templates", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  extractTemplate: (templateId: string) =>
+    request<TemplateExtractionResponse>(`/templates/${templateId}/extract`, {
+      method: "POST",
+    }),
+  updateTemplateMappings: (templateId: string, payload: TemplateMappingSchema) =>
+    request<TemplateMappingSchema>(`/templates/${templateId}/mappings`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  getTemplateMappings: (templateId: string) =>
+    request<TemplateMappingSchema>(`/templates/${templateId}/mappings`),
+  getTemplateDetail: (templateId: string) =>
+    request<TemplateDetail>(`/templates/${templateId}`),
+  generateInspectionReport: (templateId: string, payload: { mode: InspectionReportExportMode; entries: InspectionReportGenerateEntry[] }) =>
+    request<InspectionReportGenerateResponse>(`/templates/${templateId}/generate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  generateProjectInspectionReport: (projectId: number, path: string, payload: { mode: InspectionReportExportMode; entries: InspectionReportGenerateEntry[] }) =>
+    request<InspectionReportGenerateResponse>(`/projects/${projectId}/files/inspection-report/generate?path=${encodeURIComponent(path)}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  downloadProjectInspectionReportWord: async (
+    projectId: number,
+    path: string,
+    payload: { mode: InspectionReportExportMode; entries: InspectionReportGenerateEntry[] },
+  ) => {
+    const blob = await download(`/projects/${projectId}/files/inspection-report/export-word?path=${encodeURIComponent(path)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    triggerFileDownload(blob, payload.mode === "ALL" ? "물품검수조서_전체.docx" : "물품검수조서.docx");
   },
   downloadEvidenceWord: async (payload: Record<string, unknown>) => {
     const blob = await download("/documents/export/word", {
@@ -185,6 +278,11 @@ export const api = {
     });
     triggerFileDownload(blob, "evidence-document.hwp");
   },
+  previewEvidenceWord: (payload: Record<string, unknown>) =>
+    request<EvidencePreview>("/documents/preview/word", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   downloadSettlementWord: async (payload: Record<string, unknown>) => {
     const blob = await download("/settlements/export/word", {
       method: "POST",

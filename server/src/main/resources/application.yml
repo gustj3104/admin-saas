@@ -3,6 +3,10 @@ spring:
     name: admin-saas-server
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  servlet:
+    multipart:
+      max-file-size: ${MULTIPART_MAX_FILE_SIZE:20MB}
+      max-request-size: ${MULTIPART_MAX_REQUEST_SIZE:25MB}
 
 server:
   port: ${SERVER_PORT:8080}

@@ -21,7 +21,8 @@ export function BudgetPlan() {
 
   const totalAllocated = budgetItems.reduce((sum, item) => sum + item.allocated, 0);
   const totalBudget = selectedProject?.totalBudget ?? 0;
-  const remaining = totalBudget - totalAllocated;
+  const executedBudget = selectedProject?.executedBudget ?? 0;
+  const remaining = totalBudget - executedBudget;
   const allocationRate = totalBudget > 0 ? (totalAllocated / totalBudget) * 100 : 0;
   const warnings = budgetItems
     .filter((item) => item.status !== "VALID")
@@ -70,6 +71,7 @@ export function BudgetPlan() {
     <div className="space-y-6 p-4 md:p-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
+          <p className="mt-1 text-xs text-gray-500">현재 집행 반영 금액: ₩{executedBudget.toLocaleString()}</p>
           <h1 className="text-2xl font-semibold text-gray-900">예산 계획</h1>
           <p className="mt-1 text-sm text-gray-600">예산 배분 검토 및 조정을 진행합니다.</p>
         </div>

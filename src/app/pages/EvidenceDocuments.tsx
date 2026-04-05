@@ -1,451 +1,466 @@
 import type { ChangeEvent } from "react";
-import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle, Download, Eye, FilePlus2, FileText, Trash2, Upload, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CalendarDays, Download, RefreshCcw, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api/client";
-import type { EvidenceDocument, Expense, ProjectFile, TemplateFieldAnalysis } from "../api/types";
-import { useProjectContext } from "../context/ProjectContext";
+import type { Expense, ProjectFile } from "../api/types";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Calendar } from "../components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
+import { useProjectContext } from "../context/ProjectContext";
 
-type TemplateField = {
-  id: string;
-  placeholder: string;
-  description: string;
-  mapped: boolean;
-};
+const INSPECTION_TEMPLATE_CATEGORY = "inspection-template";
+const EVIDENCE_TEMPLATE_CATEGORY = "evidence-template";
 
-const PLACEHOLDER_DESCRIPTIONS: Record<string, string> = {
-  date: "지출 또는 증빙 작성일",
-  vendor: "거래처 또는 공급사명",
-  amount: "총 지출 금액",
-  itemName: "품목 또는 지출 항목명",
-  category: "예산 카테고리",
-  subcategory: "예산 세부 항목",
-  paymentMethod: "결제 수단",
-  notes: "비고",
-  projectName: "프로젝트명",
-};
+function formatDateLabel(value: string | null | undefined) {
+  return value || "-";
+}
 
-const DEFAULT_TEMPLATE_FIELDS: TemplateField[] = [
-  { id: "date", placeholder: "{{ date }}", description: PLACEHOLDER_DESCRIPTIONS.date, mapped: false },
-  { id: "vendor", placeholder: "{{ vendor }}", description: PLACEHOLDER_DESCRIPTIONS.vendor, mapped: false },
-  { id: "amount", placeholder: "{{ amount }}", description: PLACEHOLDER_DESCRIPTIONS.amount, mapped: false },
-];
+function toDateInputValue(value: Date | undefined) {
+  if (!value) return "";
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
-function toTemplateFields(analysis: TemplateFieldAnalysis | null): TemplateField[] {
-  if (!analysis) {
-    return DEFAULT_TEMPLATE_FIELDS;
-  }
+function buildInspectionWordPayload(
+  projectId: number,
+  templateCategory: string,
+  projectName: string,
+  expense: Expense,
+) {
+  const amount = expense.amount === null ? "" : String(expense.amount);
+  const quantity = expense.quantity === null ? "" : String(expense.quantity);
+  const unitPrice = expense.unitPrice === null ? "" : String(expense.unitPrice);
 
-  const extracted = new Set(analysis.placeholders);
-  const knownFields = DEFAULT_TEMPLATE_FIELDS.map((field) => ({
-    ...field,
-    mapped: extracted.has(field.id),
-  }));
-  const customFields = analysis.placeholders
-    .filter((placeholder) => !DEFAULT_TEMPLATE_FIELDS.some((field) => field.id === placeholder))
-    .map((placeholder) => ({
-      id: placeholder,
-      placeholder: `{{ ${placeholder} }}`,
-      description: PLACEHOLDER_DESCRIPTIONS[placeholder] ?? "사용자 정의 템플릿 필드",
-      mapped: true,
-    }));
+  return {
+    projectId,
+    templateCategory,
+    projectName,
+    paymentDate: expense.paymentDate,
+    vendor: expense.vendor,
+    itemName: expense.itemName,
+    category: expense.category,
+    subcategory: expense.subcategory,
+    paymentMethod: expense.paymentMethod,
+    amount,
+    notes: expense.notes ?? "",
+    fieldValues: {
+      title: expense.itemName ?? "",
+      inspector: "",
+      contractAmount: amount,
+    },
+    lineItems: [
+      {
+        itemName: expense.itemName,
+        spec: "",
+        quantity,
+        unit: "",
+        unitPrice,
+        amount,
+      },
+    ],
+  };
+}
 
-  return [...knownFields, ...customFields];
+function toInspectionEntry(expense: Expense, index: number) {
+  return {
+    receiptId: String(expense.id),
+    title: expense.itemName || null,
+    paymentDate: expense.paymentDate || null,
+    vendor: expense.vendor || null,
+    inspector: null,
+    contractAmount: expense.amount === null ? null : String(expense.amount),
+    receiptImagePath: null,
+    receiptOrder: index,
+    itemRows: [
+      {
+        itemName: expense.itemName,
+        spec: null,
+        quantity: expense.quantity === null ? null : String(expense.quantity),
+        unit: null,
+        unitPrice: expense.unitPrice === null ? null : String(expense.unitPrice),
+        amount: expense.amount === null ? null : String(expense.amount),
+      },
+    ],
+  };
+}
+
+function getExecutionStatusLabel(status: Expense["status"]) {
+  return status === "PROCESSED" ? "집행 완료" : "집행 전";
 }
 
 export function EvidenceDocuments() {
-  const { selectedProjectId, selectedProject } = useProjectContext();
-  const [documents, setDocuments] = useState<EvidenceDocument[]>([]);
+  const { selectedProject, selectedProjectId, refreshProjects } = useProjectContext();
+  const [projectTemplate, setProjectTemplate] = useState<ProjectFile | null>(null);
+  const [projectTemplateCategory, setProjectTemplateCategory] = useState<string>(INSPECTION_TEMPLATE_CATEGORY);
   const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [templateFiles, setTemplateFiles] = useState<ProjectFile[]>([]);
-  const [selectedDocument, setSelectedDocument] = useState<EvidenceDocument | null>(null);
-  const [showFieldReview, setShowFieldReview] = useState(false);
-  const [templateConfirmed, setTemplateConfirmed] = useState(false);
-  const [templateFields, setTemplateFields] = useState<TemplateField[]>(DEFAULT_TEMPLATE_FIELDS);
-  const [templateAnalysis, setTemplateAnalysis] = useState<TemplateFieldAnalysis | null>(null);
-  const [analyzingTemplate, setAnalyzingTemplate] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [downloadingRowId, setDownloadingRowId] = useState<number | null>(null);
+  const [executingRowId, setExecutingRowId] = useState<number | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
+  const [dateDialogOpen, setDateDialogOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
 
-  const uploadedTemplate = templateFiles[0] ?? null;
+  const sortedExpenses = useMemo(
+    () =>
+      [...expenses].sort((left, right) => {
+        const leftDate = left.paymentDate ?? "";
+        const rightDate = right.paymentDate ?? "";
+        return rightDate.localeCompare(leftDate) || right.id - left.id;
+      }),
+    [expenses],
+  );
 
-  const refresh = async () => {
-    if (!selectedProjectId) return;
-    const [documentData, expenseData, fileData] = await Promise.all([
-      api.getDocuments(selectedProjectId),
+  const refreshPage = async () => {
+    if (!selectedProjectId) {
+      setProjectTemplate(null);
+      setProjectTemplateCategory(INSPECTION_TEMPLATE_CATEGORY);
+      setExpenses([]);
+      return;
+    }
+
+    const [inspectionFiles, evidenceFiles, loadedExpenses] = await Promise.all([
+      api.getProjectFiles(selectedProjectId, INSPECTION_TEMPLATE_CATEGORY),
+      api.getProjectFiles(selectedProjectId, EVIDENCE_TEMPLATE_CATEGORY),
       api.getExpenses(selectedProjectId),
-      api.getProjectFiles(selectedProjectId, "evidence-template"),
     ]);
-    setDocuments(documentData);
-    setExpenses(expenseData);
-    setTemplateFiles(fileData);
+    const resolvedTemplate = inspectionFiles[0] ?? evidenceFiles[0] ?? null;
+    setProjectTemplate(resolvedTemplate);
+    setProjectTemplateCategory(resolvedTemplate?.category ?? INSPECTION_TEMPLATE_CATEGORY);
+    setExpenses(loadedExpenses);
   };
 
   useEffect(() => {
-    if (!selectedProjectId) return;
-    void refresh();
-  }, [selectedProjectId]);
-
-  useEffect(() => {
-    setSelectedDocument(null);
-    setShowFieldReview(false);
-    setTemplateConfirmed(false);
-    setTemplateAnalysis(null);
-    setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-  }, [selectedProjectId]);
-
-  useEffect(() => {
-    if (!selectedProjectId || !uploadedTemplate) {
-      setTemplateAnalysis(null);
-      setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-      return;
-    }
-
-    setAnalyzingTemplate(true);
-    void api
-      .inspectProjectTemplateFields(selectedProjectId, uploadedTemplate.relativePath)
-      .then((analysis) => {
-        setTemplateAnalysis(analysis);
-        setTemplateFields(toTemplateFields(analysis));
-        if (analysis.supported && analysis.placeholders.length > 0) {
-          setTemplateConfirmed(true);
-        }
-      })
+    setLoading(true);
+    void refreshPage()
       .catch((error) => {
-        setTemplateAnalysis(null);
-        setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-        toast.error(error instanceof Error ? error.message : "템플릿 필드 분석에 실패했습니다.");
+        toast.error(error instanceof Error ? error.message : "증빙 문서 정보를 불러오지 못했습니다.");
       })
-      .finally(() => setAnalyzingTemplate(false));
-  }, [selectedProjectId, uploadedTemplate]);
-
-  const handleCreateDocument = async () => {
-    if (!selectedProjectId) return;
-    const targetExpense = expenses[0];
-    if (!targetExpense) {
-      toast.warning("문서를 만들 지출 데이터가 없습니다.");
-      return;
-    }
-
-    await api.createDocument({
-      projectId: selectedProjectId,
-      expenseId: targetExpense.id,
-      documentType: "지출 증빙",
-      vendor: targetExpense.vendor,
-      amount: targetExpense.amount,
-      createdDate: new Date().toISOString().slice(0, 10),
-      status: "DRAFT",
-    });
-    await refresh();
-    toast.success("증빙 문서 초안을 생성했습니다.");
-  };
-
-  const handleView = async (id: number) => {
-    const document = await api.getDocument(id);
-    setSelectedDocument(document);
-  };
-
-  const buildExportPayload = (document: EvidenceDocument) => {
-    const expense = expenses.find((item) => item.expenseCode === document.expenseCode);
-    return {
-      projectId: selectedProjectId,
-      projectName: selectedProject?.name ?? "",
-      paymentDate: expense?.paymentDate ?? document.createdDate,
-      vendor: document.vendor,
-      itemName: expense?.itemName ?? document.documentType,
-      category: expense?.category ?? "",
-      subcategory: expense?.subcategory ?? "",
-      paymentMethod: expense?.paymentMethod ?? "",
-      amount: `₩${document.amount.toLocaleString()}`,
-      notes: expense?.notes ?? "",
-    };
-  };
-
-  const handleDownloadWord = async (document: EvidenceDocument) => {
-    await api.downloadEvidenceWord(buildExportPayload(document));
-    toast.success("Word 문서를 다운로드했습니다.");
-  };
+      .finally(() => setLoading(false));
+  }, [selectedProjectId]);
 
   const handleTemplateUpload = async (event: ChangeEvent<HTMLInputElement>) => {
-    if (!selectedProjectId) return;
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file || !selectedProjectId) return;
 
-    await api.uploadProjectFile(selectedProjectId, "evidence-template", file);
-    await refresh();
-    setShowFieldReview(false);
-    setTemplateConfirmed(false);
-    setTemplateAnalysis(null);
-    setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-    event.target.value = "";
-    toast.success(`${file.name} 템플릿을 업로드했습니다.`);
+    setLoading(true);
+    try {
+      await api.uploadProjectFile(selectedProjectId, INSPECTION_TEMPLATE_CATEGORY, file);
+      await refreshPage();
+      toast.success("물품검수조서 템플릿을 교체했습니다.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "템플릿 업로드에 실패했습니다.");
+    } finally {
+      setLoading(false);
+      event.target.value = "";
+    }
   };
 
-  const handleRemoveTemplate = async () => {
-    if (!selectedProjectId || !uploadedTemplate) return;
-    await api.deleteProjectFile(selectedProjectId, uploadedTemplate.relativePath);
-    await refresh();
-    setShowFieldReview(false);
-    setTemplateConfirmed(false);
-    setTemplateAnalysis(null);
-    setTemplateFields(DEFAULT_TEMPLATE_FIELDS);
-    toast.success("템플릿을 제거했습니다.");
+  const handleDownloadOne = async (expense: Expense) => {
+    if (!selectedProjectId) {
+      toast.warning("먼저 프로젝트를 선택하세요.");
+      return;
+    }
+    if (!projectTemplate) {
+      toast.warning("먼저 물품검수조서 템플릿을 업로드하세요.");
+      return;
+    }
+
+    setDownloadingRowId(expense.id);
+    try {
+      await api.downloadEvidenceWord(
+        buildInspectionWordPayload(
+          selectedProjectId,
+          projectTemplateCategory || INSPECTION_TEMPLATE_CATEGORY,
+          selectedProject?.name ?? "",
+          expense,
+        ),
+      );
+      toast.success(`${expense.itemName || "선택한 건"} Word 파일을 다운로드했습니다.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Word 저장에 실패했습니다.");
+    } finally {
+      setDownloadingRowId(null);
+    }
   };
 
-  const toggleFieldMapping = (fieldId: string) => {
-    setTemplateFields((prev) =>
-      prev.map((field) => (field.id === fieldId ? { ...field, mapped: !field.mapped } : field)),
-    );
+  const handleExecuteExpense = async (expense: Expense, status: Expense["status"]) => {
+    if (!selectedProjectId) {
+      toast.warning("먼저 프로젝트를 선택하세요.");
+      return;
+    }
+
+    setExecutingRowId(expense.id);
+    try {
+      await api.updateExpenseStatus(expense.id, status);
+      await Promise.all([refreshPage(), refreshProjects()]);
+      toast.success(`${expense.itemName || "선택한 건"} 상태를 ${getExecutionStatusLabel(status)}로 반영했습니다.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "집행 상태 반영에 실패했습니다.");
+    } finally {
+      setExecutingRowId(null);
+    }
   };
 
-  const updateTemplateField = (fieldId: string, patch: Partial<TemplateField>) => {
-    setTemplateFields((prev) =>
-      prev.map((field) => (field.id === fieldId ? { ...field, ...patch } : field)),
-    );
+  const handleSaveAll = async () => {
+    if (!selectedProjectId || !projectTemplate) {
+      toast.warning("먼저 물품검수조서 템플릿을 확인하세요.");
+      return;
+    }
+    if (!sortedExpenses.length) {
+      toast.warning("저장할 지출 기록이 없습니다.");
+      return;
+    }
+
+    setSavingAll(true);
+    try {
+      await api.downloadProjectInspectionReportWord(selectedProjectId, projectTemplate.relativePath, {
+        mode: "ALL",
+        entries: sortedExpenses.map(toInspectionEntry),
+      });
+      toast.success("전체 저장 Word 파일을 다운로드했습니다.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "전체 저장에 실패했습니다.");
+    } finally {
+      setSavingAll(false);
+    }
   };
 
-  const handleRemoveTemplateField = (fieldId: string) => {
-    setTemplateFields((prev) => prev.filter((field) => field.id !== fieldId));
-  };
+  const handleSaveByDate = async () => {
+    if (!selectedProjectId || !projectTemplate) {
+      toast.warning("먼저 물품검수조서 템플릿을 확인하세요.");
+      return;
+    }
 
-  const handleConfirmTemplate = () => {
-    setTemplateConfirmed(true);
-    setShowFieldReview(false);
-    toast.success("템플릿 필드 검토를 완료했습니다.");
+    const dateKey = toDateInputValue(selectedDate);
+    if (!dateKey) {
+      toast.warning("저장할 날짜를 선택하세요.");
+      return;
+    }
+
+    const dateExpenses = sortedExpenses.filter((expense) => expense.paymentDate === dateKey);
+    if (!dateExpenses.length) {
+      toast.warning("선택한 날짜에 해당하는 지출 기록이 없습니다.");
+      return;
+    }
+
+    setSavingAll(true);
+    try {
+      await api.downloadProjectInspectionReportWord(selectedProjectId, projectTemplate.relativePath, {
+        mode: "BY_DATE",
+        entries: dateExpenses.map(toInspectionEntry),
+      });
+      setDateDialogOpen(false);
+      toast.success(`${dateKey} 날짜별 Word 파일을 다운로드했습니다.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "날짜별 저장에 실패했습니다.");
+    } finally {
+      setSavingAll(false);
+    }
   };
 
   return (
     <div className="space-y-6 p-4 md:p-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">증빙 문서</h1>
-          <p className="mt-1 text-sm text-gray-600">문서 초안 생성, 템플릿 관리, Word 다운로드를 처리합니다.</p>
-        </div>
-        <Button className="w-full gap-2 sm:w-auto" onClick={() => void handleCreateDocument()}>
-          <FilePlus2 className="h-4 w-4" />
-          문서 생성
-        </Button>
+      <div>
+        <h1 className="text-2xl font-semibold text-gray-900">증빙 문서</h1>
+        <p className="mt-1 text-sm text-gray-600">
+          물품검수조서 프로젝트 템플릿을 기준으로 지출 기록 로그를 검토하고 건별, 날짜별, 전체 Word 저장을 진행합니다.
+        </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>템플릿 설정</CardTitle>
+          <CardTitle>프로젝트 템플릿</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="space-y-3">
-            <p className="text-sm text-gray-600">
-              증빙문서 생성을 위한 워드 또는 한글 템플릿을 업로드하세요. {"{{ date }}"}, {"{{ vendor }}"}, {"{{ amount }}"} 등의 필드가 자동으로 채워집니다.
-            </p>
-
-            {!uploadedTemplate ? (
-              <div className="rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 p-6 transition-colors hover:border-blue-400 hover:bg-blue-50/50">
-                <div className="flex flex-col items-center justify-center gap-3">
-                  <div className="rounded-full bg-blue-100 p-3">
-                    <Upload className="h-6 w-6 text-blue-600" />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-gray-900">문서 템플릿 업로드</p>
-                    <p className="mt-1 text-xs text-gray-600">.docx, .doc, .hwp 파일 지원</p>
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => document.getElementById("template-upload")?.click()}>
-                    <Upload className="mr-2 h-4 w-4" />
-                    파일 선택
-                  </Button>
-                  <input
-                    id="template-upload"
-                    type="file"
-                    accept=".doc,.docx,.hwp,.hwpx"
-                    onChange={(event) => void handleTemplateUpload(event)}
-                    className="hidden"
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="rounded-lg border border-blue-300 bg-blue-50 p-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-3">
-                      <div className="rounded-lg bg-blue-100 p-2">
-                        <FileText className="h-5 w-5 text-blue-600" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{uploadedTemplate.originalFilename}</p>
-                        <p className="mt-1 text-xs text-gray-600">{(uploadedTemplate.size / 1024).toFixed(2)} KB</p>
-                        <div className="mt-2 flex items-center gap-2">
-                          {analyzingTemplate ? (
-                            <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
-                              필드 분석중
-                            </Badge>
-                          ) : templateAnalysis?.supported ? (
-                            <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">
-                              <CheckCircle className="mr-1 h-3 w-3" />
-                              자동 분석 가능
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="border-yellow-200 bg-yellow-50 text-yellow-700">
-                              <AlertCircle className="mr-1 h-3 w-3" />
-                              자동 분석 미지원
-                            </Badge>
-                          )}
-                          {templateConfirmed && templateAnalysis?.supported && (
-                            <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">
-                              확인완료
-                            </Badge>
-                          )}
-                        </div>
+        <CardContent className="space-y-4">
+          {projectTemplate ? (
+            <>
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-lg bg-blue-100 p-2">
+                      <Upload className="h-5 w-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{projectTemplate.originalFilename}</p>
+                      <p className="mt-1 text-xs text-gray-600">{(projectTemplate.size / 1024).toFixed(2)} KB</p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">
+                          연결 완료
+                        </Badge>
+                        {projectTemplateCategory !== INSPECTION_TEMPLATE_CATEGORY ? (
+                          <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">
+                            기존 프로젝트 템플릿 사용 중
+                          </Badge>
+                        ) : null}
+                        <span className="text-xs text-gray-500">{projectTemplate.uploadedAt}</span>
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => setShowFieldReview(true)} disabled={analyzingTemplate}>
-                        <Eye className="mr-2 h-4 w-4" />
-                        필드 검토
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => document.getElementById("template-upload")?.click()}>
-                        변경
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleRemoveTemplate()}
-                        className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                      <input
-                        id="template-upload"
-                        type="file"
-                        accept=".doc,.docx,.hwp,.hwpx"
-                        onChange={(event) => void handleTemplateUpload(event)}
-                        className="hidden"
-                      />
-                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => document.getElementById("inspection-template-upload")?.click()}
+                      disabled={!selectedProjectId || loading}
+                    >
+                      {loading ? "업로드 중..." : "다시 업로드"}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => void refreshPage()} disabled={loading}>
+                      <RefreshCcw className="mr-2 h-4 w-4" />
+                      새로고침
+                    </Button>
                   </div>
                 </div>
-
-                {templateAnalysis?.warnings?.length ? (
-                  <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
-                    {templateAnalysis.warnings[0]}
-                  </div>
-                ) : null}
               </div>
-            )}
-          </div>
-
-          {showFieldReview && (
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-blue-900">템플릿 필드 검토</h4>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>필드 플레이스홀더</TableHead>
-                    <TableHead>설명</TableHead>
-                    <TableHead className="text-right">매핑 여부</TableHead>
-                    <TableHead className="w-12" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {templateFields.map((field) => (
-                    <TableRow key={field.id}>
-                      <TableCell>
-                        <Input
-                          value={field.placeholder}
-                          onChange={(event) => updateTemplateField(field.id, { placeholder: event.target.value })}
-                          className="font-medium"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          value={field.description}
-                          onChange={(event) => updateTemplateField(field.id, { description: event.target.value })}
-                          className="text-sm"
-                        />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => toggleFieldMapping(field.id)}
-                        >
-                          {field.mapped ? (
-                            <CheckCircle className="h-3 w-3 text-green-600" />
-                          ) : (
-                            <X className="h-3 w-3 text-red-600" />
-                          )}
-                        </Button>
-                      </TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleRemoveTemplateField(field.id)}>
-                          <Trash2 className="h-4 w-4 text-red-600" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <div className="flex justify-end">
-                <Button variant="outline" size="sm" onClick={handleConfirmTemplate}>
-                  템플릿 확인
+              <input
+                id="inspection-template-upload"
+                type="file"
+                accept=".doc,.docx,.hwp,.hwpx"
+                className="hidden"
+                onChange={(event) => void handleTemplateUpload(event)}
+              />
+            </>
+          ) : (
+            <div className="rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 p-6">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <Upload className="h-8 w-8 text-blue-600" />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">프로젝트 템플릿을 업로드하세요</p>
+                  <p className="mt-1 text-xs text-gray-600">기존 프로젝트 템플릿이 있으면 자동으로 사용하고, 여기서 교체할 수 있습니다.</p>
+                </div>
+                <Button
+                  onClick={() => document.getElementById("inspection-template-upload")?.click()}
+                  disabled={!selectedProjectId || loading}
+                >
+                  템플릿 업로드
                 </Button>
+                <input
+                  id="inspection-template-upload"
+                  type="file"
+                  accept=".doc,.docx,.hwp,.hwpx"
+                  className="hidden"
+                  onChange={(event) => void handleTemplateUpload(event)}
+                />
               </div>
             </div>
           )}
         </CardContent>
       </Card>
-
-      {selectedDocument && (
-        <Card>
-          <CardHeader>
-            <CardTitle>선택된 문서</CardTitle>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div>문서 ID: {selectedDocument.id}</div>
-            <div>지출 코드: {selectedDocument.expenseCode}</div>
-            <div>문서 유형: {selectedDocument.documentType}</div>
-            <div>거래처: {selectedDocument.vendor}</div>
-            <div>금액: ₩{selectedDocument.amount.toLocaleString()}</div>
-            <div>생성일: {selectedDocument.createdDate}</div>
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>
-          <CardTitle>문서 목록</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {documents.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-gray-300 p-6 text-sm text-gray-500">
-              생성된 증빙 문서가 없습니다. 상단의 `문서 생성`으로 초안을 만들 수 있습니다.
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <CardTitle>지출 기록 로그</CardTitle>
+              <p className="mt-1 text-sm text-gray-600">날짜와 건명을 확인하고 집행 상태를 선택하거나 Word 파일로 저장합니다.</p>
             </div>
-          ) : (
-            documents.map((document) => (
-              <div key={document.id} className="flex items-center justify-between rounded-lg border border-gray-200 p-4">
-                <div>
-                  <div className="font-medium text-gray-900">{document.documentType}</div>
-                  <div className="mt-1 text-xs text-gray-600">
-                    {document.expenseCode} / {document.vendor}
-                  </div>
-                  <div className="mt-1 text-xs text-gray-500">{document.createdDate}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline">{document.status}</Badge>
-                  <Button variant="outline" size="sm" onClick={() => void handleView(document.id)}>
-                    <Eye className="h-4 w-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => void handleDownloadWord(document)}>
-                    <Download className="h-4 w-4" />
-                    Word
-                  </Button>
-                </div>
-              </div>
-            ))
-          )}
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => setDateDialogOpen(true)} disabled={!projectTemplate || !sortedExpenses.length || savingAll}>
+                <CalendarDays className="mr-2 h-4 w-4" />
+                날짜별 저장
+              </Button>
+              <Button onClick={() => void handleSaveAll()} disabled={!projectTemplate || !sortedExpenses.length || savingAll}>
+                <Download className="mr-2 h-4 w-4" />
+                {savingAll ? "저장 중..." : "전체 저장"}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>날짜</TableHead>
+                <TableHead>건명</TableHead>
+                <TableHead className="w-40">집행</TableHead>
+                <TableHead className="w-40 text-right">Word 저장</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sortedExpenses.length ? (
+                sortedExpenses.map((expense) => (
+                  <TableRow key={expense.id}>
+                    <TableCell>{formatDateLabel(expense.paymentDate)}</TableCell>
+                    <TableCell>
+                      <div className="font-medium text-gray-900">{expense.itemName || "-"}</div>
+                      <div className="text-xs text-gray-500">{expense.vendor || "-"}</div>
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={expense.status}
+                        onValueChange={(value) => void handleExecuteExpense(expense, value as Expense["status"])}
+                        disabled={executingRowId === expense.id}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="PENDING">집행 전</SelectItem>
+                          <SelectItem value="PROCESSED">집행 완료</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleDownloadOne(expense)}
+                        disabled={!projectTemplate || downloadingRowId === expense.id}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        {downloadingRowId === expense.id ? "저장 중..." : "Word 저장"}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-sm text-gray-500">
+                    표시할 지출 기록이 없습니다.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={dateDialogOpen} onOpenChange={setDateDialogOpen}>
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>날짜별 저장</DialogTitle>
+            <DialogDescription>저장할 결제일자를 선택하면 해당 날짜의 지출 기록만 묶어서 Word 파일을 생성합니다.</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-center rounded-lg border border-gray-200">
+            <Calendar mode="single" selected={selectedDate} onSelect={setSelectedDate} />
+          </div>
+          <div className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            선택한 날짜: <span className="font-medium text-gray-900">{toDateInputValue(selectedDate) || "-"}</span>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDateDialogOpen(false)}>
+              취소
+            </Button>
+            <Button onClick={() => void handleSaveByDate()} disabled={savingAll}>
+              {savingAll ? "저장 중..." : "저장 실행"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

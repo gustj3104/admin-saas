@@ -4,11 +4,19 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class HwpExportService {
 
     public byte[] createEvidenceDocument(HwpEvidencePayload payload) {
+        StringBuilder fieldsXml = new StringBuilder();
+        if (payload.fieldValues() != null) {
+            payload.fieldValues().forEach((key, value) -> fieldsXml.append("""
+                    <field key="%s">%s</field>
+                    """.formatted(escape(key), escape(value))));
+        }
+
         String xml = """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <hwpml>
@@ -23,10 +31,11 @@ public class HwpExportService {
                     <paymentMethod>%s</paymentMethod>
                     <amount>%s</amount>
                     <notes>%s</notes>
+                    <fields>%s</fields>
                   </document>
                 </hwpml>
                 """.formatted(
-                escape("지출 증빙 문서"),
+                escape("지출증빙 문서"),
                 escape(payload.projectName()),
                 escape(payload.paymentDate()),
                 escape(payload.vendor()),
@@ -35,7 +44,8 @@ public class HwpExportService {
                 escape(payload.subcategory()),
                 escape(payload.paymentMethod()),
                 escape(payload.amount()),
-                escape(payload.notes())
+                escape(payload.notes()),
+                fieldsXml
         );
         return xml.getBytes(StandardCharsets.UTF_8);
     }
@@ -120,7 +130,8 @@ public class HwpExportService {
             String subcategory,
             String paymentMethod,
             String amount,
-            String notes
+            String notes,
+            Map<String, String> fieldValues
     ) {
     }
 

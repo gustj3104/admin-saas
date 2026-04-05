@@ -27,7 +27,7 @@ public class SettlementService {
 
     public SettlementReportEntity latest(Long projectId) {
         return settlementReportRepository.findTopByProjectIdOrderByReportDateDescIdDesc(projectId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Settlement report not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "정산 보고서를 찾을 수 없습니다."));
     }
 
     public SettlementReportEntity generate(ProjectEntity project) {
@@ -58,7 +58,7 @@ public class SettlementService {
 
     public SettlementReportEntity update(Long id, SettlementReportEntity changes) {
         SettlementReportEntity report = settlementReportRepository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Settlement report not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "정산 보고서를 찾을 수 없습니다."));
         report.setReportTitle(changes.getReportTitle());
         report.setReportDate(changes.getReportDate());
         report.setPreparedBy(changes.getPreparedBy());
