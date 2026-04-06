@@ -15,10 +15,18 @@ FROM eclipse-temurin:17-jre
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-kor \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/build/libs/admin-saas-server-0.0.1-SNAPSHOT.jar app.jar
 
 ENV SPRING_PROFILES_ACTIVE=prod
 ENV SERVER_PORT=8080
+ENV OCR_COMMAND=tesseract
 
 EXPOSE 8080
 

@@ -50,6 +50,8 @@ $env:HWP_NATIVE_CONVERTER_COMMAND="C:\path\to\native-converter.exe \"{docx}\" \"
 java -jar build\libs\admin-saas-server-0.0.1-SNAPSHOT.jar
 ```
 
+Render에서 운영 배포할 때는 네이티브 Java 서비스 대신 [server/Dockerfile](/C:/Users/gustj/Downloads/Admin%20SaaS%20Layout%20Design/server/Dockerfile) 기반 Docker 서비스를 사용해야 합니다. 이 이미지가 `tesseract-ocr`, `tesseract-ocr-eng`, `tesseract-ocr-kor`를 설치하므로 `OCR_COMMAND=tesseract`만 유지하면 됩니다.
+
 ## Main API paths
 
 - `GET /api/dashboard/overview?projectId=1`

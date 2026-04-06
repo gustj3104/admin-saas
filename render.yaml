@@ -1,11 +1,10 @@
 services:
   - type: web
     name: admin-saas-server
-    runtime: java
-    rootDir: server
+    env: docker
     plan: free
-    buildCommand: ./gradlew bootJar
-    startCommand: java -jar build/libs/admin-saas-server-0.0.1-SNAPSHOT.jar
+    rootDir: .
+    dockerfilePath: ./server/Dockerfile
     envVars:
       - key: SPRING_PROFILES_ACTIVE
         value: prod

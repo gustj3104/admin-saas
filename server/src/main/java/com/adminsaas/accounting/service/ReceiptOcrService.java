@@ -4,6 +4,8 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -17,10 +19,12 @@ import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -31,6 +35,9 @@ import java.util.regex.Pattern;
 
 @Service
 public class ReceiptOcrService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReceiptOcrService.class);
+    private static final Path WINDOWS_TESSERACT_PATH = Path.of("C:\\Program Files\\Tesseract-OCR\\tesseract.exe");
 
     private static final Pattern DATE_PATTERN = Pattern.compile("(20\\d{2})\\s*[./-]\\s*(\\d{1,2})\\s*[./-]\\s*(\\d{1,2})");
     private static final Pattern KOREAN_DATE_PATTERN = Pattern.compile("(20\\d{2})\\s*년\\s*(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일");
@@ -59,7 +66,7 @@ public class ReceiptOcrService {
             @Value("${app.ocr.timeout-seconds}") long timeoutSeconds
     ) {
         this.fileStorageService = fileStorageService;
-        this.ocrCommand = ocrCommand;
+        this.ocrCommand = resolveOcrCommand(ocrCommand);
         this.ocrLanguage = ocrLanguage;
         this.timeoutSeconds = timeoutSeconds;
     }
@@ -74,7 +81,7 @@ public class ReceiptOcrService {
 
         Optional<String> rawText = extractText(storedPath);
         if (rawText.isEmpty()) {
-            return unavailableResult(storedFile, "Tesseract OCR을 사용할 수 없습니다. 필요하면 설치 후 OCR_COMMAND를 설정해 주세요.");
+            return unavailableResult(storedFile, "Tesseract OCR을 사용할 수 없습니다. OCR_COMMAND를 확인해 주세요. 현재 값: " + ocrCommand);
         }
 
         String extractedText = rawText.get().trim();
@@ -214,37 +221,49 @@ public class ReceiptOcrService {
             outputBase = Files.createTempFile("receipt-ocr-", "");
             Files.deleteIfExists(outputBase);
 
-            Process process = new ProcessBuilder(
-                    ocrCommand,
-                    inputPath.toString(),
-                    outputBase.toString(),
-                    "-l",
-                    ocrLanguage,
-                    "--psm",
-                    "6"
-            ).redirectErrorStream(true).start();
+            for (String commandCandidate : getOcrCommandCandidates()) {
+                try {
+                    Process process = new ProcessBuilder(
+                            commandCandidate,
+                            inputPath.toString(),
+                            outputBase.toString(),
+                            "-l",
+                            ocrLanguage,
+                            "--psm",
+                            "6"
+                    ).redirectErrorStream(true).start();
 
-            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
-            if (!finished) {
-                process.destroyForcibly();
-                return Optional.empty();
+                    boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+                    if (!finished) {
+                        process.destroyForcibly();
+                        log.warn("Tesseract timed out after {} seconds. command={}, input={}", timeoutSeconds, commandCandidate, inputPath);
+                        continue;
+                    }
+
+                    if (process.exitValue() != 0) {
+                        String output = consumeProcessOutput(process);
+                        log.warn("Tesseract exited with code {}. command={}, input={}, output={}", process.exitValue(), commandCandidate, inputPath, output);
+                        continue;
+                    }
+
+                    Path textOutput = Path.of(outputBase + ".txt");
+                    if (!Files.exists(textOutput)) {
+                        log.warn("Tesseract completed without output file. command={}, input={}", commandCandidate, inputPath);
+                        continue;
+                    }
+
+                    return Optional.of(Files.readString(textOutput, StandardCharsets.UTF_8));
+                } catch (IOException exception) {
+                    log.warn("Failed to execute Tesseract. command={}, input={}", commandCandidate, inputPath, exception);
+                }
             }
 
-            if (process.exitValue() != 0) {
-                consumeProcessOutput(process);
-                return Optional.empty();
-            }
-
-            Path textOutput = Path.of(outputBase + ".txt");
-            if (!Files.exists(textOutput)) {
-                return Optional.empty();
-            }
-
-            return Optional.of(Files.readString(textOutput, StandardCharsets.UTF_8));
+            return Optional.empty();
         } catch (IOException | InterruptedException exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            log.warn("Tesseract OCR failed before process execution. configuredCommand={}, input={}", ocrCommand, inputPath, exception);
             return Optional.empty();
         } finally {
             if (outputBase != null) {
@@ -257,12 +276,58 @@ public class ReceiptOcrService {
         }
     }
 
-    private void consumeProcessOutput(Process process) throws IOException {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            while (reader.readLine() != null) {
-                // Drain output so the process cannot block on a full buffer.
+    private List<String> getOcrCommandCandidates() {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        if (ocrCommand != null && !ocrCommand.isBlank()) {
+            candidates.add(ocrCommand);
+        }
+        if (isWindows()) {
+            candidates.add("tesseract");
+            candidates.add("tesseract.exe");
+        } else {
+            candidates.add("tesseract");
+        }
+        return List.copyOf(candidates);
+    }
+
+    private String resolveOcrCommand(String configuredCommand) {
+        if (configuredCommand != null && !configuredCommand.isBlank()) {
+            try {
+                Path configuredPath = Path.of(configuredCommand);
+                if (configuredPath.isAbsolute() && Files.exists(configuredPath)) {
+                    return configuredPath.toString();
+                }
+            } catch (InvalidPathException exception) {
+                log.warn("OCR_COMMAND is not a plain filesystem path. value={}", configuredCommand);
+            }
+            if (!"tesseract".equalsIgnoreCase(configuredCommand) && !"tesseract.exe".equalsIgnoreCase(configuredCommand)) {
+                return configuredCommand;
             }
         }
+
+        if (isWindows()) {
+            return "tesseract";
+        }
+
+        return configuredCommand;
+    }
+
+    private boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private String consumeProcessOutput(Process process) throws IOException {
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!output.isEmpty()) {
+                    output.append(System.lineSeparator());
+                }
+                output.append(line);
+            }
+        }
+        return output.toString();
     }
 
     private boolean isSupportedFile(Path path) {

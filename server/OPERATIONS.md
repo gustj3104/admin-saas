@@ -7,7 +7,8 @@
 - Set `CORS_ALLOWED_ORIGINS`
 - Set `OCR_COMMAND`
 - Ensure PostgreSQL is reachable from the application host
-- Ensure Tesseract is installed and `kor`, `eng` language packs exist
+- If deploying with [render.yaml](/C:/Users/gustj/Downloads/Admin%20SaaS%20Layout%20Design/render.yaml), deploy the backend as a Docker service so the image installs `tesseract-ocr`, `tesseract-ocr-eng`, and `tesseract-ocr-kor`
+- If not using Docker, install Tesseract manually on the server and ensure `kor`, `eng` language packs exist
 - Ensure upload storage path is writable via `UPLOAD_DIR`
 - Review `ddl-auto=validate` compatibility against the target database schema
 - Confirm health endpoints are reachable: `/actuator/health`, `/actuator/info`

@@ -34,9 +34,10 @@ jdbc:postgresql://ep-xxxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
 
 Render에서 새 Web Service를 만들고 이 저장소를 연결합니다.
 
-- Root Directory: `server`
-- Build Command: `./gradlew bootJar`
-- Start Command: `java -jar build/libs/admin-saas-server-0.0.1-SNAPSHOT.jar`
+- Blueprint/`render.yaml` 기준으로 Docker 서비스로 배포
+- Root Directory: `.`
+- Dockerfile Path: `./server/Dockerfile`
+- Docker 이미지 안에 `tesseract-ocr`, `tesseract-ocr-eng`, `tesseract-ocr-kor`가 설치됨
 
 환경변수:
 
@@ -116,4 +117,3 @@ https://admin-saas-layout-design.vercel.app
 - S3/R2 업로드 저장소 연동
 - Render/Neon 환경변수 값 실제 입력 포맷 정리
 - Vercel/Render 배포 체크리스트 축약본 작성
-
